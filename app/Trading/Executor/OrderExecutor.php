@@ -79,6 +79,62 @@ class OrderExecutor
         }
 
         if ($signal['action'] === 'buy') {
+            // ショートポジションが存在する場合は全てクローズ
+            $shortPositions = Position::where('symbol', $symbol)
+                ->where('side', 'short')
+                ->where('status', 'open')
+                ->orderBy('opened_at', 'asc')
+                ->get();
+
+            if ($shortPositions->count() > 0) {
+                // 全ショートポジションを一斉決済
+                $totalProfitLoss = 0;
+                foreach ($shortPositions as $shortPosition) {
+                    $closeResult = $this->exchangeClient->buy($symbol, $shortPosition->quantity, $signal['price']);
+
+                    if ($closeResult['success']) {
+                        // ショートポジションの損益は逆転: (entry_price - exit_price) * quantity
+                        $profitLoss = ($shortPosition->entry_price - $closeResult['price']) * $shortPosition->quantity;
+                        $totalProfitLoss += $profitLoss;
+
+                        $shortPosition->update([
+                            'exit_price' => $closeResult['price'],
+                            'status' => 'closed',
+                            'closed_at' => now(),
+                            'profit_loss' => $profitLoss,
+                        ]);
+                    }
+                }
+
+                Log::info('All short positions closed, proceeding to long entry', [
+                    'symbol' => $symbol,
+                    'count' => $shortPositions->count(),
+                    'total_profit_loss' => $totalProfitLoss,
+                ]);
+
+                // 一斉決済後、そのまま新規ロングエントリー処理へ進む
+            }
+
+            // ロングポジション数をカウント
+            $longCount = Position::where('symbol', $symbol)
+                ->where('side', 'long')
+                ->where('status', 'open')
+                ->count();
+
+            // 上限チェック（最大3ポジション）
+            if ($longCount >= 3) {
+                Log::info('Long position limit reached', [
+                    'symbol' => $symbol,
+                    'current_count' => $longCount,
+                ]);
+
+                return [
+                    'success' => false,
+                    'action' => 'buy_rejected',
+                    'message' => "ロングポジション上限到達 ({$longCount}/3) - エントリー見送り",
+                ];
+            }
+
             // 新規エントリー時はスプレッドをチェック
             $maxSpread = config('trading.defaults.max_spread', 500);
             $currentSpread = $this->exchangeClient->getSpread($symbol);
@@ -109,6 +165,12 @@ class OrderExecutor
                     'status' => 'open',
                     'opened_at' => now(),
                 ]);
+
+                Log::info('Long position added', [
+                    'symbol' => $symbol,
+                    'current_count' => $longCount + 1,
+                    'entry_price' => $result['price'],
+                ]);
             }
 
             return $result;
@@ -118,8 +180,9 @@ class OrderExecutor
             $result = $this->exchangeClient->sell($symbol, $signal['quantity'], $signal['price']);
 
             if ($result['success']) {
-                // ポジションをクローズ
+                // ロングポジションをクローズ
                 $position = Position::where('symbol', $symbol)
+                    ->where('side', 'long')
                     ->where('status', 'open')
                     ->orderBy('opened_at', 'desc')
                     ->first();
@@ -132,6 +195,105 @@ class OrderExecutor
                         'profit_loss' => ($result['price'] - $position->entry_price) * $position->quantity,
                     ]);
                 }
+            }
+
+            return $result;
+        }
+
+        if ($signal['action'] === 'short') {
+            // ロングポジションが存在する場合は全てクローズ
+            $longPositions = Position::where('symbol', $symbol)
+                ->where('side', 'long')
+                ->where('status', 'open')
+                ->orderBy('opened_at', 'asc')
+                ->get();
+
+            if ($longPositions->count() > 0) {
+                // 全ロングポジションを一斉決済
+                $totalProfitLoss = 0;
+                foreach ($longPositions as $longPosition) {
+                    $closeResult = $this->exchangeClient->sell($symbol, $longPosition->quantity, $signal['price']);
+
+                    if ($closeResult['success']) {
+                        // ロングポジションの損益計算
+                        $profitLoss = ($closeResult['price'] - $longPosition->entry_price) * $longPosition->quantity;
+                        $totalProfitLoss += $profitLoss;
+
+                        $longPosition->update([
+                            'exit_price' => $closeResult['price'],
+                            'status' => 'closed',
+                            'closed_at' => now(),
+                            'profit_loss' => $profitLoss,
+                        ]);
+                    }
+                }
+
+                Log::info('All long positions closed, proceeding to short entry', [
+                    'symbol' => $symbol,
+                    'count' => $longPositions->count(),
+                    'total_profit_loss' => $totalProfitLoss,
+                ]);
+
+                // 一斉決済後、そのまま新規ショートエントリー処理へ進む
+            }
+
+            // ショートポジション数をカウント
+            $shortCount = Position::where('symbol', $symbol)
+                ->where('side', 'short')
+                ->where('status', 'open')
+                ->count();
+
+            // 上限チェック（最大3ポジション）
+            if ($shortCount >= 3) {
+                Log::info('Short position limit reached', [
+                    'symbol' => $symbol,
+                    'current_count' => $shortCount,
+                ]);
+
+                return [
+                    'success' => false,
+                    'action' => 'short_rejected',
+                    'message' => "ショートポジション上限到達 ({$shortCount}/3) - エントリー見送り",
+                ];
+            }
+
+            // 新規ショートエントリー時はスプレッドをチェック
+            $maxSpread = config('trading.defaults.max_spread', 500);
+            $currentSpread = $this->exchangeClient->getSpread($symbol);
+
+            if ($currentSpread > $maxSpread) {
+                Log::warning('Spread too wide for short entry', [
+                    'symbol' => $symbol,
+                    'current_spread' => $currentSpread,
+                    'max_spread' => $maxSpread,
+                ]);
+
+                return [
+                    'success' => false,
+                    'action' => 'short_rejected',
+                    'message' => "スプレッド超過 ({$currentSpread}円 > {$maxSpread}円) - ショートエントリー見送り",
+                ];
+            }
+
+            // ショートポジションを開く（売りから入る）
+            $result = $this->exchangeClient->sell($symbol, $signal['quantity'], $signal['price']);
+
+            if ($result['success']) {
+                // ショートポジションを記録
+                Position::create([
+                    'symbol' => $symbol,
+                    'side' => 'short',
+                    'quantity' => $signal['quantity'],
+                    'entry_price' => $result['price'],
+                    'status' => 'open',
+                    'opened_at' => now(),
+                ]);
+
+                Log::info('Short position added', [
+                    'symbol' => $symbol,
+                    'current_count' => $shortCount + 1,
+                    'entry_price' => $result['price'],
+                ]);
             }
 
             return $result;

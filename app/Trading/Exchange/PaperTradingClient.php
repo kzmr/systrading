@@ -6,11 +6,13 @@ use Illuminate\Support\Facades\Cache;
 
 /**
  * ペーパートレーディング用のクライアント（仮想取引）
+ * 実際のGMOCoin価格データを使用してシミュレーション
  */
 class PaperTradingClient implements ExchangeClient
 {
     private array $balance;
     private array $positions = [];
+    private GMOCoinClient $realDataClient;
 
     public function __construct()
     {
@@ -20,24 +22,15 @@ class PaperTradingClient implements ExchangeClient
         ]);
 
         $this->positions = Cache::get('paper_positions', []);
+
+        // 実際の価格データ取得用のクライアント
+        $this->realDataClient = new GMOCoinClient();
     }
 
     public function getMarketData(string $symbol, int $limit = 100): array
     {
-        // 実際の取引所APIからデータを取得する場合はここで実装
-        // ここでは簡易的なダミーデータを返す
-        $prices = [];
-        $basePrice = 50000; // BTC基準価格
-
-        for ($i = 0; $i < $limit; $i++) {
-            $prices[] = $basePrice + (rand(-1000, 1000) * ($i / 10));
-        }
-
-        return [
-            'symbol' => $symbol,
-            'prices' => $prices,
-            'timestamp' => now()->toIso8601String(),
-        ];
+        // GMOCoinから実際の価格データを取得
+        return $this->realDataClient->getMarketData($symbol, $limit);
     }
 
     public function buy(string $symbol, float $quantity, ?float $price = null): array
@@ -143,7 +136,7 @@ class PaperTradingClient implements ExchangeClient
 
     public function getSpread(string $symbol): float
     {
-        // ペーパートレードではスプレッドは常に0（理想的な環境）
-        return 0.0;
+        // GMOCoinから実際のスプレッドを取得
+        return $this->realDataClient->getSpread($symbol);
     }
 }

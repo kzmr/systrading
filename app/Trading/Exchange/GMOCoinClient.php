@@ -89,7 +89,8 @@ class GMOCoinClient implements ExchangeClient
         $data = json_decode($response->getBody()->getContents(), true);
 
         if ($data['status'] !== 0) {
-            throw new \Exception("GMO Coin API Error: {$data['messages']}");
+            $messages = is_array($data['messages']) ? json_encode($data['messages']) : $data['messages'];
+            throw new \Exception("GMO Coin API Error: {$messages}");
         }
 
         // 終値のみを抽出
