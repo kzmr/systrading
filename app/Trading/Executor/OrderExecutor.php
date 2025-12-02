@@ -3,6 +3,7 @@
 namespace App\Trading\Executor;
 
 use App\Models\Position;
+use App\Models\PriceHistory;
 use App\Models\TradingLog;
 use App\Trading\Exchange\ExchangeClient;
 use App\Trading\Strategy\TradingStrategy;
@@ -33,6 +34,14 @@ class OrderExecutor
         try {
             // 1. 市場データを取得
             $marketData = $this->exchangeClient->getMarketData($symbol);
+
+            // 現在価格を記録（バックテスト用）
+            $currentPrice = end($marketData['prices']);
+            PriceHistory::create([
+                'symbol' => $symbol,
+                'price' => $currentPrice,
+                'recorded_at' => now(),
+            ]);
 
             // 2. ストラテジーで分析
             $signal = $this->strategy->analyze($marketData);

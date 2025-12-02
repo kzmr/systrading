@@ -31,3 +31,6 @@ composer.phar
 
 # Temporary directories
 /temp_laravel
+
+# CSV exports
+*.csv
