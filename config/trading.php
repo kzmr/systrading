@@ -38,10 +38,10 @@ return [
     */
     'defaults' => [
         'trade_size' => env('TRADE_SIZE', 0.01),
-        'max_positions' => env('MAX_POSITIONS', 5),
-        'stop_loss_percent' => env('STOP_LOSS_PERCENT', 2.0),
+        'max_positions' => env('MAX_POSITIONS', 3),
+        'stop_loss_percent' => env('STOP_LOSS_PERCENT', 1.0),
         'take_profit_percent' => env('TAKE_PROFIT_PERCENT', 5.0),
-        'max_spread_percentage' => env('MAX_SPREAD_PERCENTAGE', 0.001), // 最大許容スプレッド（0.1% = 0.001）
-        'trailing_stop_offset_percent' => env('TRAILING_STOP_OFFSET_PERCENT', 0.5), // トレーリングストップのオフセット（0.5% = 0.005）
+        'max_spread' => env('MAX_SPREAD', 0.1), // 最大許容スプレッド（%）
+        'trailing_stop_offset_percent' => env('TRAILING_STOP_OFFSET_PERCENT', 0.5), // トレーリングストップのオフセット（%）
     ],
 ];

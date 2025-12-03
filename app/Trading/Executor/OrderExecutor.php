@@ -9,6 +9,9 @@ use App\Trading\Exchange\ExchangeClient;
 use App\Trading\Strategy\TradingStrategy;
 use Illuminate\Support\Facades\Log;
 
+use App\Mail\TradingNotification;
+use Illuminate\Support\Facades\Mail;
+
 /**
  * 注文実行を管理するクラス
  */
@@ -119,6 +122,17 @@ class OrderExecutor
                             'closed_at' => now(),
                             'profit_loss' => $profitLoss,
                         ]);
+
+                        // エグジット通知を送信
+                        $this->sendNotification(
+                            'exit',
+                            $symbol,
+                            'short',
+                            $closeResult['price'],
+                            $shortPosition->quantity,
+                            $profitLoss,
+                            '逆方向ブレイクアウト - ロングエントリーのため決済'
+                        );
                     }
                 }
 
@@ -193,6 +207,15 @@ class OrderExecutor
                     'opened_at' => now(),
                 ]);
 
+                // エントリー通知を送信
+                $this->sendNotification(
+                    'entry',
+                    $symbol,
+                    'long',
+                    $result['price'],
+                    $signal['quantity']
+                );
+
                 Log::info('Long position added', [
                     'symbol' => $symbol,
                     'current_count' => $longCount + 1,
@@ -252,6 +275,17 @@ class OrderExecutor
                             'closed_at' => now(),
                             'profit_loss' => $profitLoss,
                         ]);
+
+                        // エグジット通知を送信
+                        $this->sendNotification(
+                            'exit',
+                            $symbol,
+                            'long',
+                            $closeResult['price'],
+                            $longPosition->quantity,
+                            $profitLoss,
+                            '逆方向ブレイクダウン - ショートエントリーのため決済'
+                        );
                     }
                 }
 
@@ -327,6 +361,15 @@ class OrderExecutor
                     'opened_at' => now(),
                 ]);
 
+                // エントリー通知を送信
+                $this->sendNotification(
+                    'entry',
+                    $symbol,
+                    'short',
+                    $result['price'],
+                    $signal['quantity']
+                );
+
                 Log::info('Short position added', [
                     'symbol' => $symbol,
                     'current_count' => $shortCount + 1,
@@ -396,6 +439,17 @@ class OrderExecutor
                         ),
                         'executed_at' => now(),
                     ]);
+
+                    // エグジット通知を送信
+                    $this->sendNotification(
+                        'exit',
+                        $symbol,
+                        'long',
+                        $sellResult['price'],
+                        $position->quantity,
+                        $profitLoss,
+                        '損切り実行 - 1%ストップロス到達'
+                    );
                 }
             }
         }
@@ -447,6 +501,17 @@ class OrderExecutor
                         ),
                         'executed_at' => now(),
                     ]);
+
+                    // エグジット通知を送信
+                    $this->sendNotification(
+                        'exit',
+                        $symbol,
+                        'short',
+                        $buyResult['price'],
+                        $position->quantity,
+                        $profitLoss,
+                        '損切り実行 - 1%ストップロス到達'
+                    );
                 }
             }
         }
@@ -466,6 +531,62 @@ class OrderExecutor
             'message' => $result['message'] ?? 'OK',
             'executed_at' => now(),
         ]);
+    }
+
+    /**
+     * メール通知を送信
+     */
+    private function sendNotification(
+        string $action,
+        string $symbol,
+        string $side,
+        float $price,
+        float $quantity,
+        ?float $profitLoss = null,
+        ?string $reason = null
+    ): void {
+        if (!env('TRADING_NOTIFICATION_ENABLED', false)) {
+            return;
+        }
+
+        $email = env('TRADING_NOTIFICATION_EMAIL');
+        if (!$email) {
+            return;
+        }
+
+        try {
+            $profitLossPercent = null;
+            if ($profitLoss !== null && $quantity > 0 && $price > 0) {
+                $entryValue = $price * $quantity;
+                if ($entryValue > 0) {
+                    $profitLossPercent = ($profitLoss / $entryValue) * 100;
+                }
+            }
+
+            Mail::to($email)->send(new TradingNotification(
+                action: $action,
+                side: $side,
+                symbol: $symbol,
+                price: $price,
+                quantity: $quantity,
+                profitLoss: $profitLoss,
+                profitLossPercent: $profitLossPercent,
+                reason: $reason
+            ));
+
+            Log::info('Trading notification sent', [
+                'action' => $action,
+                'symbol' => $symbol,
+                'side' => $side,
+                'email' => $email,
+            ]);
+        } catch (\Exception $e) {
+            Log::error('Failed to send trading notification', [
+                'error' => $e->getMessage(),
+                'action' => $action,
+                'symbol' => $symbol,
+            ]);
+        }
     }
 
     /**
@@ -614,6 +735,17 @@ class OrderExecutor
                         ),
                         'executed_at' => now(),
                     ]);
+
+                    // エグジット通知を送信
+                    $this->sendNotification(
+                        'exit',
+                        $symbol,
+                        'long',
+                        $sellResult['price'],
+                        $position->quantity,
+                        $profitLoss,
+                        'トレーリングストップ到達'
+                    );
                 }
             }
         }
@@ -663,6 +795,17 @@ class OrderExecutor
                         ),
                         'executed_at' => now(),
                     ]);
+
+                    // エグジット通知を送信
+                    $this->sendNotification(
+                        'exit',
+                        $symbol,
+                        'short',
+                        $buyResult['price'],
+                        $position->quantity,
+                        $profitLoss,
+                        'トレーリングストップ到達'
+                    );
                 }
             }
         }

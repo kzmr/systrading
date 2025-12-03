@@ -41,6 +41,33 @@ class HighLowBreakoutStrategy extends TradingStrategy
             ];
         }
 
+        // スプレッドチェック
+        $maxSpreadPercent = config('trading.defaults.max_spread', 0.1);
+        if (isset($marketData['bid']) && isset($marketData['ask'])) {
+            $bid = (float)$marketData['bid'];
+            $ask = (float)$marketData['ask'];
+
+            if ($bid > 0) {
+                $spreadPercent = (($ask - $bid) / $bid) * 100;
+
+                if ($spreadPercent > $maxSpreadPercent) {
+                    Log::warning('Spread too wide - skipping entry', [
+                        'symbol' => $symbol,
+                        'bid' => $bid,
+                        'ask' => $ask,
+                        'spread_percent' => $spreadPercent,
+                        'max_spread_percent' => $maxSpreadPercent,
+                    ]);
+
+                    return [
+                        'action' => 'hold',
+                        'quantity' => 0,
+                        'price' => null,
+                    ];
+                }
+            }
+        }
+
         // 現在価格（最新）
         $currentPrice = end($prices);
 
