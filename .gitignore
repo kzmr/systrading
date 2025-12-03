@@ -34,3 +34,4 @@ composer.phar
 
 # CSV exports
 *.csv
+.serena/

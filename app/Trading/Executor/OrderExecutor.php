@@ -43,13 +43,20 @@ class OrderExecutor
                 'recorded_at' => now(),
             ]);
 
-            // 2. ストラテジーで分析
+            // 2. 損切りチェック（1%逆行で自動決済）
+            $this->checkStopLoss($symbol, $currentPrice);
+
+            // 3. トレーリングストップの更新と確認
+            $this->updateTrailingStop($symbol, $marketData);
+            $this->checkTrailingStop($symbol, $currentPrice);
+
+            // 4. ストラテジーで分析
             $signal = $this->strategy->analyze($marketData);
 
-            // 3. シグナルに基づいて注文実行
+            // 5. シグナルに基づいて注文実行
             $result = $this->processSignal($symbol, $signal);
 
-            // 4. ログを記録
+            // 6. ログを記録
             $this->logExecution($symbol, $signal, $result);
 
             return $result;
@@ -144,33 +151,44 @@ class OrderExecutor
                 ];
             }
 
-            // 新規エントリー時はスプレッドをチェック
-            $maxSpread = config('trading.defaults.max_spread', 500);
+            // 新規エントリー時はスプレッドをチェック（割合ベース）
+            $maxSpreadPercentage = config('trading.defaults.max_spread_percentage', 0.001); // 0.1%
             $currentSpread = $this->exchangeClient->getSpread($symbol);
+            $maxSpreadValue = $signal['price'] * $maxSpreadPercentage;
 
-            if ($currentSpread > $maxSpread) {
+            if ($currentSpread > $maxSpreadValue) {
+                $spreadPercentage = ($currentSpread / $signal['price']) * 100;
+
                 Log::warning('Spread too wide for entry', [
                     'symbol' => $symbol,
+                    'current_price' => $signal['price'],
                     'current_spread' => $currentSpread,
-                    'max_spread' => $maxSpread,
+                    'spread_percentage' => $spreadPercentage,
+                    'max_spread_percentage' => $maxSpreadPercentage * 100,
                 ]);
 
                 return [
                     'success' => false,
                     'action' => 'buy_rejected',
-                    'message' => "スプレッド超過 ({$currentSpread}円 > {$maxSpread}円) - エントリー見送り",
+                    'message' => sprintf(
+                        'スプレッド超過 (%.4f円 = %.2f%% > %.2f%%) - エントリー見送り',
+                        $currentSpread,
+                        $spreadPercentage,
+                        $maxSpreadPercentage * 100
+                    ),
                 ];
             }
 
             $result = $this->exchangeClient->buy($symbol, $signal['quantity'], $signal['price']);
 
             if ($result['success']) {
-                // ポジションを記録
+                // ポジションを記録（初期トレーリングストップ: エントリー - 1.5%）
                 Position::create([
                     'symbol' => $symbol,
                     'side' => 'long',
                     'quantity' => $signal['quantity'],
                     'entry_price' => $result['price'],
+                    'trailing_stop_price' => $result['price'] * 0.985,
                     'status' => 'open',
                     'opened_at' => now(),
                 ]);
@@ -266,21 +284,31 @@ class OrderExecutor
                 ];
             }
 
-            // 新規ショートエントリー時はスプレッドをチェック
-            $maxSpread = config('trading.defaults.max_spread', 500);
+            // 新規ショートエントリー時はスプレッドをチェック（割合ベース）
+            $maxSpreadPercentage = config('trading.defaults.max_spread_percentage', 0.001); // 0.1%
             $currentSpread = $this->exchangeClient->getSpread($symbol);
+            $maxSpreadValue = $signal['price'] * $maxSpreadPercentage;
 
-            if ($currentSpread > $maxSpread) {
+            if ($currentSpread > $maxSpreadValue) {
+                $spreadPercentage = ($currentSpread / $signal['price']) * 100;
+
                 Log::warning('Spread too wide for short entry', [
                     'symbol' => $symbol,
+                    'current_price' => $signal['price'],
                     'current_spread' => $currentSpread,
-                    'max_spread' => $maxSpread,
+                    'spread_percentage' => $spreadPercentage,
+                    'max_spread_percentage' => $maxSpreadPercentage * 100,
                 ]);
 
                 return [
                     'success' => false,
                     'action' => 'short_rejected',
-                    'message' => "スプレッド超過 ({$currentSpread}円 > {$maxSpread}円) - ショートエントリー見送り",
+                    'message' => sprintf(
+                        'スプレッド超過 (%.4f円 = %.2f%% > %.2f%%) - ショートエントリー見送り',
+                        $currentSpread,
+                        $spreadPercentage,
+                        $maxSpreadPercentage * 100
+                    ),
                 ];
             }
 
@@ -288,12 +316,13 @@ class OrderExecutor
             $result = $this->exchangeClient->sell($symbol, $signal['quantity'], $signal['price']);
 
             if ($result['success']) {
-                // ショートポジションを記録
+                // ショートポジションを記録（初期トレーリングストップ: エントリー + 1.5%）
                 Position::create([
                     'symbol' => $symbol,
                     'side' => 'short',
                     'quantity' => $signal['quantity'],
                     'entry_price' => $result['price'],
+                    'trailing_stop_price' => $result['price'] * 1.015,
                     'status' => 'open',
                     'opened_at' => now(),
                 ]);
@@ -315,6 +344,115 @@ class OrderExecutor
     }
 
     /**
+     * 損切りチェック（エントリーから1%逆行で決済）
+     */
+    private function checkStopLoss(string $symbol, float $currentPrice): void
+    {
+        $stopLossPercentage = 0.01; // 1%
+
+        // ロングポジションの損切りチェック
+        $longPositions = Position::where('symbol', $symbol)
+            ->where('side', 'long')
+            ->where('status', 'open')
+            ->get();
+
+        foreach ($longPositions as $position) {
+            $stopLossPrice = $position->entry_price * (1 - $stopLossPercentage);
+
+            if ($currentPrice <= $stopLossPrice) {
+                // 損切り実行
+                $sellResult = $this->exchangeClient->sell($symbol, $position->quantity, $currentPrice);
+
+                if ($sellResult['success']) {
+                    $profitLoss = ($sellResult['price'] - $position->entry_price) * $position->quantity;
+
+                    $position->update([
+                        'exit_price' => $sellResult['price'],
+                        'status' => 'closed',
+                        'closed_at' => now(),
+                        'profit_loss' => $profitLoss,
+                    ]);
+
+                    Log::warning('Stop loss triggered - Long position closed', [
+                        'symbol' => $symbol,
+                        'position_id' => $position->id,
+                        'entry_price' => $position->entry_price,
+                        'exit_price' => $sellResult['price'],
+                        'stop_loss_price' => $stopLossPrice,
+                        'profit_loss' => $profitLoss,
+                        'percentage' => ($profitLoss / ($position->entry_price * $position->quantity)) * 100,
+                    ]);
+
+                    TradingLog::create([
+                        'symbol' => $symbol,
+                        'action' => 'stop_loss_sell',
+                        'quantity' => $position->quantity,
+                        'price' => $sellResult['price'],
+                        'message' => sprintf(
+                            '損切り実行 - ロング決済 (エントリー: %.2f円 → 損切り: %.2f円, 損失: %.4f円)',
+                            $position->entry_price,
+                            $sellResult['price'],
+                            $profitLoss
+                        ),
+                        'executed_at' => now(),
+                    ]);
+                }
+            }
+        }
+
+        // ショートポジションの損切りチェック
+        $shortPositions = Position::where('symbol', $symbol)
+            ->where('side', 'short')
+            ->where('status', 'open')
+            ->get();
+
+        foreach ($shortPositions as $position) {
+            $stopLossPrice = $position->entry_price * (1 + $stopLossPercentage);
+
+            if ($currentPrice >= $stopLossPrice) {
+                // 損切り実行（ショートは買い戻し）
+                $buyResult = $this->exchangeClient->buy($symbol, $position->quantity, $currentPrice);
+
+                if ($buyResult['success']) {
+                    // ショートポジションの損益: (entry_price - exit_price) * quantity
+                    $profitLoss = ($position->entry_price - $buyResult['price']) * $position->quantity;
+
+                    $position->update([
+                        'exit_price' => $buyResult['price'],
+                        'status' => 'closed',
+                        'closed_at' => now(),
+                        'profit_loss' => $profitLoss,
+                    ]);
+
+                    Log::warning('Stop loss triggered - Short position closed', [
+                        'symbol' => $symbol,
+                        'position_id' => $position->id,
+                        'entry_price' => $position->entry_price,
+                        'exit_price' => $buyResult['price'],
+                        'stop_loss_price' => $stopLossPrice,
+                        'profit_loss' => $profitLoss,
+                        'percentage' => ($profitLoss / ($position->entry_price * $position->quantity)) * 100,
+                    ]);
+
+                    TradingLog::create([
+                        'symbol' => $symbol,
+                        'action' => 'stop_loss_buy',
+                        'quantity' => $position->quantity,
+                        'price' => $buyResult['price'],
+                        'message' => sprintf(
+                            '損切り実行 - ショート決済 (エントリー: %.2f円 → 損切り: %.2f円, 損失: %.4f円)',
+                            $position->entry_price,
+                            $buyResult['price'],
+                            $profitLoss
+                        ),
+                        'executed_at' => now(),
+                    ]);
+                }
+            }
+        }
+    }
+
+    /**
      * 実行ログを記録
      */
     private function logExecution(string $symbol, array $signal, array $result): void
@@ -328,5 +466,205 @@ class OrderExecutor
             'message' => $result['message'] ?? 'OK',
             'executed_at' => now(),
         ]);
+    }
+
+    /**
+     * トレーリングストップを更新（直近20本の高値・安値ベース）
+     */
+    private function updateTrailingStop(string $symbol, array $marketData): void
+    {
+        $lookbackPeriod = 20;
+        $trailingOffsetPercent = config('trading.defaults.trailing_stop_offset_percent', 0.5);
+        $trailingOffset = $trailingOffsetPercent / 100; // パーセントを小数に変換
+
+        // 直近20本の価格から高値・安値を計算
+        $recentPrices = array_slice($marketData['prices'], -$lookbackPeriod);
+        $recentLow = min($recentPrices);
+        $recentHigh = max($recentPrices);
+
+        // ロングポジションのトレーリングストップ更新
+        $longPositions = Position::where('symbol', $symbol)
+            ->where('side', 'long')
+            ->where('status', 'open')
+            ->get();
+
+        foreach ($longPositions as $position) {
+            // トレーリングストップ = 直近安値 - 0.3%
+            $newTrailingStop = $recentLow * (1 - $trailingOffset);
+
+            // 既存ポジション（trailing_stop_priceがnull）の場合は初期値を設定
+            if ($position->trailing_stop_price === null) {
+                $position->update([
+                    'trailing_stop_price' => $position->entry_price * 0.985, // 初期値: エントリー - 1.5%
+                ]);
+
+                Log::info('Trailing stop initialized - Long', [
+                    'symbol' => $symbol,
+                    'position_id' => $position->id,
+                    'entry_price' => $position->entry_price,
+                    'initial_stop' => $position->entry_price * 0.985,
+                ]);
+                continue;
+            }
+
+            // 現在のトレーリングストップより高い（有利）場合のみ更新
+            if ($newTrailingStop > $position->trailing_stop_price) {
+                $position->update([
+                    'trailing_stop_price' => $newTrailingStop,
+                ]);
+
+                Log::info('Trailing stop updated - Long', [
+                    'symbol' => $symbol,
+                    'position_id' => $position->id,
+                    'old_stop' => $position->trailing_stop_price,
+                    'new_stop' => $newTrailingStop,
+                    'recent_low' => $recentLow,
+                ]);
+            }
+        }
+
+        // ショートポジションのトレーリングストップ更新
+        $shortPositions = Position::where('symbol', $symbol)
+            ->where('side', 'short')
+            ->where('status', 'open')
+            ->get();
+
+        foreach ($shortPositions as $position) {
+            // トレーリングストップ = 直近高値 + 0.3%
+            $newTrailingStop = $recentHigh * (1 + $trailingOffset);
+
+            // 既存ポジション（trailing_stop_priceがnull）の場合は初期値を設定
+            if ($position->trailing_stop_price === null) {
+                $position->update([
+                    'trailing_stop_price' => $position->entry_price * 1.015, // 初期値: エントリー + 1.5%
+                ]);
+
+                Log::info('Trailing stop initialized - Short', [
+                    'symbol' => $symbol,
+                    'position_id' => $position->id,
+                    'entry_price' => $position->entry_price,
+                    'initial_stop' => $position->entry_price * 1.015,
+                ]);
+                continue;
+            }
+
+            // 現在のトレーリングストップより低い（有利）場合のみ更新
+            if ($newTrailingStop < $position->trailing_stop_price) {
+                $position->update([
+                    'trailing_stop_price' => $newTrailingStop,
+                ]);
+
+                Log::info('Trailing stop updated - Short', [
+                    'symbol' => $symbol,
+                    'position_id' => $position->id,
+                    'old_stop' => $position->trailing_stop_price,
+                    'new_stop' => $newTrailingStop,
+                    'recent_high' => $recentHigh,
+                ]);
+            }
+        }
+    }
+
+    /**
+     * トレーリングストップによる決済チェック
+     */
+    private function checkTrailingStop(string $symbol, float $currentPrice): void
+    {
+        // ロングポジションのトレーリングストップチェック
+        $longPositions = Position::where('symbol', $symbol)
+            ->where('side', 'long')
+            ->where('status', 'open')
+            ->get();
+
+        foreach ($longPositions as $position) {
+            if ($currentPrice <= $position->trailing_stop_price) {
+                // トレーリングストップで決済
+                $sellResult = $this->exchangeClient->sell($symbol, $position->quantity, $currentPrice);
+
+                if ($sellResult['success']) {
+                    $profitLoss = ($sellResult['price'] - $position->entry_price) * $position->quantity;
+
+                    $position->update([
+                        'exit_price' => $sellResult['price'],
+                        'status' => 'closed',
+                        'closed_at' => now(),
+                        'profit_loss' => $profitLoss,
+                    ]);
+
+                    Log::info('Trailing stop triggered - Long position closed', [
+                        'symbol' => $symbol,
+                        'position_id' => $position->id,
+                        'entry_price' => $position->entry_price,
+                        'exit_price' => $sellResult['price'],
+                        'trailing_stop' => $position->trailing_stop_price,
+                        'profit_loss' => $profitLoss,
+                        'percentage' => ($profitLoss / ($position->entry_price * $position->quantity)) * 100,
+                    ]);
+
+                    TradingLog::create([
+                        'symbol' => $symbol,
+                        'action' => 'trailing_stop_sell',
+                        'quantity' => $position->quantity,
+                        'price' => $sellResult['price'],
+                        'message' => sprintf(
+                            'トレーリングストップ決済 - ロング (エントリー: %.2f円 → 決済: %.2f円, 損益: %.4f円)',
+                            $position->entry_price,
+                            $sellResult['price'],
+                            $profitLoss
+                        ),
+                        'executed_at' => now(),
+                    ]);
+                }
+            }
+        }
+
+        // ショートポジションのトレーリングストップチェック
+        $shortPositions = Position::where('symbol', $symbol)
+            ->where('side', 'short')
+            ->where('status', 'open')
+            ->get();
+
+        foreach ($shortPositions as $position) {
+            if ($currentPrice >= $position->trailing_stop_price) {
+                // トレーリングストップで決済（買い戻し）
+                $buyResult = $this->exchangeClient->buy($symbol, $position->quantity, $currentPrice);
+
+                if ($buyResult['success']) {
+                    // ショートポジションの損益: (entry_price - exit_price) * quantity
+                    $profitLoss = ($position->entry_price - $buyResult['price']) * $position->quantity;
+
+                    $position->update([
+                        'exit_price' => $buyResult['price'],
+                        'status' => 'closed',
+                        'closed_at' => now(),
+                        'profit_loss' => $profitLoss,
+                    ]);
+
+                    Log::info('Trailing stop triggered - Short position closed', [
+                        'symbol' => $symbol,
+                        'position_id' => $position->id,
+                        'entry_price' => $position->entry_price,
+                        'exit_price' => $buyResult['price'],
+                        'trailing_stop' => $position->trailing_stop_price,
+                        'profit_loss' => $profitLoss,
+                        'percentage' => ($profitLoss / ($position->entry_price * $position->quantity)) * 100,
+                    ]);
+
+                    TradingLog::create([
+                        'symbol' => $symbol,
+                        'action' => 'trailing_stop_buy',
+                        'quantity' => $position->quantity,
+                        'price' => $buyResult['price'],
+                        'message' => sprintf(
+                            'トレーリングストップ決済 - ショート (エントリー: %.2f円 → 決済: %.2f円, 損益: %.4f円)',
+                            $position->entry_price,
+                            $buyResult['price'],
+                            $profitLoss
+                        ),
+                        'executed_at' => now(),
+                    ]);
+                }
+            }
+        }
     }
 }

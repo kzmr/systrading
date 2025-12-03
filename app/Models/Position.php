@@ -11,6 +11,7 @@ class Position extends Model
         'side',
         'quantity',
         'entry_price',
+        'trailing_stop_price',
         'exit_price',
         'status',
         'profit_loss',
@@ -21,6 +22,7 @@ class Position extends Model
     protected $casts = [
         'quantity' => 'decimal:8',
         'entry_price' => 'decimal:8',
+        'trailing_stop_price' => 'decimal:8',
         'exit_price' => 'decimal:8',
         'profit_loss' => 'decimal:8',
         'opened_at' => 'datetime',
