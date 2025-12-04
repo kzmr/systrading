@@ -56,6 +56,11 @@ class OrderExecutor
             // 4. ストラテジーで分析
             $signal = $this->strategy->analyze($marketData);
 
+            // 成行注文の場合は現在価格をセット（スプレッドチェック用）
+            if ($signal['price'] === null) {
+                $signal['price'] = $currentPrice;
+            }
+
             // 5. シグナルに基づいて注文実行
             $result = $this->processSignal($symbol, $signal);
 
@@ -196,13 +201,14 @@ class OrderExecutor
             $result = $this->exchangeClient->buy($symbol, $signal['quantity'], $signal['price']);
 
             if ($result['success']) {
-                // ポジションを記録（初期トレーリングストップ: エントリー - 1.5%）
+                // ポジションを記録（初期トレーリングストップ: config値を使用）
+                $initialTrailingPercent = config('trading.defaults.initial_trailing_stop_percent', 1.5);
                 Position::create([
                     'symbol' => $symbol,
                     'side' => 'long',
                     'quantity' => $signal['quantity'],
                     'entry_price' => $result['price'],
-                    'trailing_stop_price' => $result['price'] * 0.985,
+                    'trailing_stop_price' => $result['price'] * (1 - $initialTrailingPercent / 100),
                     'status' => 'open',
                     'opened_at' => now(),
                 ]);
@@ -350,13 +356,14 @@ class OrderExecutor
             $result = $this->exchangeClient->sell($symbol, $signal['quantity'], $signal['price']);
 
             if ($result['success']) {
-                // ショートポジションを記録（初期トレーリングストップ: エントリー + 1.5%）
+                // ショートポジションを記録（初期トレーリングストップ: config値を使用）
+                $initialTrailingPercent = config('trading.defaults.initial_trailing_stop_percent', 1.5);
                 Position::create([
                     'symbol' => $symbol,
                     'side' => 'short',
                     'quantity' => $signal['quantity'],
                     'entry_price' => $result['price'],
-                    'trailing_stop_price' => $result['price'] * 1.015,
+                    'trailing_stop_price' => $result['price'] * (1 + $initialTrailingPercent / 100),
                     'status' => 'open',
                     'opened_at' => now(),
                 ]);
@@ -615,15 +622,18 @@ class OrderExecutor
 
             // 既存ポジション（trailing_stop_priceがnull）の場合は初期値を設定
             if ($position->trailing_stop_price === null) {
+                $initialTrailingPercent = config('trading.defaults.initial_trailing_stop_percent', 1.5);
+                $initialStop = $position->entry_price * (1 - $initialTrailingPercent / 100);
+
                 $position->update([
-                    'trailing_stop_price' => $position->entry_price * 0.985, // 初期値: エントリー - 1.5%
+                    'trailing_stop_price' => $initialStop,
                 ]);
 
                 Log::info('Trailing stop initialized - Long', [
                     'symbol' => $symbol,
                     'position_id' => $position->id,
                     'entry_price' => $position->entry_price,
-                    'initial_stop' => $position->entry_price * 0.985,
+                    'initial_stop' => $initialStop,
                 ]);
                 continue;
             }
@@ -656,15 +666,18 @@ class OrderExecutor
 
             // 既存ポジション（trailing_stop_priceがnull）の場合は初期値を設定
             if ($position->trailing_stop_price === null) {
+                $initialTrailingPercent = config('trading.defaults.initial_trailing_stop_percent', 1.5);
+                $initialStop = $position->entry_price * (1 + $initialTrailingPercent / 100);
+
                 $position->update([
-                    'trailing_stop_price' => $position->entry_price * 1.015, // 初期値: エントリー + 1.5%
+                    'trailing_stop_price' => $initialStop,
                 ]);
 
                 Log::info('Trailing stop initialized - Short', [
                     'symbol' => $symbol,
                     'position_id' => $position->id,
                     'entry_price' => $position->entry_price,
-                    'initial_stop' => $position->entry_price * 1.015,
+                    'initial_stop' => $initialStop,
                 ]);
                 continue;
             }

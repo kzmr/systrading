@@ -77,7 +77,7 @@ class PaperTradingClient implements ExchangeClient
         $executionPrice = $price ?? $this->getCurrentPrice($symbol);
         $revenue = $quantity * $executionPrice;
 
-        // ポジションから売却
+        // ロングポジションから売却を試みる
         $sold = false;
         foreach ($this->positions as $key => $position) {
             if ($position['symbol'] === $symbol && $position['quantity'] >= $quantity) {
@@ -90,16 +90,24 @@ class PaperTradingClient implements ExchangeClient
             }
         }
 
-        if (!$sold) {
+        if ($sold) {
+            // ロングポジションを決済した場合、残高を増やす
+            $this->balance['USDT'] += $revenue;
+            $this->saveState();
+
             return [
-                'success' => false,
-                'message' => '売却可能なポジションがありません',
+                'success' => true,
+                'symbol' => $symbol,
+                'quantity' => $quantity,
+                'price' => $executionPrice,
+                'revenue' => $revenue,
+                'timestamp' => now()->toIso8601String(),
             ];
         }
 
-        // 残高を増やす
-        $this->balance['USDT'] += $revenue;
-
+        // ロングポジションがない場合は、ショート新規エントリーとして処理
+        // ペーパートレードでは実際の資金は不要（仮想取引）
+        // ポジション管理はOrderExecutorとPositionモデルで行う
         $this->saveState();
 
         return [
@@ -109,6 +117,7 @@ class PaperTradingClient implements ExchangeClient
             'price' => $executionPrice,
             'revenue' => $revenue,
             'timestamp' => now()->toIso8601String(),
+            'type' => 'short_entry', // ショート新規エントリーであることを示す
         ];
     }
 

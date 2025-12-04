@@ -26,6 +26,15 @@ SELECT
     side as 'サイド',
     quantity as '数量',
     entry_price as 'エントリー価格',
+    trailing_stop_price as 'トレーリングS',
+    ROUND(
+        CASE
+            WHEN side = 'long' THEN entry_price * 0.99
+            WHEN side = 'short' THEN entry_price * 1.01
+            ELSE 0
+        END,
+        2
+    ) as '固定損切',
     ROUND(
         CASE
             WHEN side = 'long' THEN ${CURRENT_PRICE} - entry_price
@@ -50,8 +59,7 @@ SELECT
         END,
         2
     ) || '%' as '損益率',
-    datetime(opened_at, 'localtime') as 'オープン日時',
-    ROUND((JULIANDAY('now') - JULIANDAY(opened_at)) * 24, 1) as '保有時間(h)'
+    datetime(opened_at, 'localtime') as 'オープン日時'
 FROM positions
 WHERE status = 'open'
 ORDER BY opened_at DESC;

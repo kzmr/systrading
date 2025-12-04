@@ -43,5 +43,6 @@ return [
         'take_profit_percent' => env('TAKE_PROFIT_PERCENT', 5.0),
         'max_spread' => env('MAX_SPREAD', 0.1), // 最大許容スプレッド（%）
         'trailing_stop_offset_percent' => env('TRAILING_STOP_OFFSET_PERCENT', 0.5), // トレーリングストップのオフセット（%）
+        'initial_trailing_stop_percent' => env('INITIAL_TRAILING_STOP_PERCENT', 1.5), // トレーリングストップの初期値（%）
     ],
 ];
