@@ -49,13 +49,13 @@ Laravelベースの自動トレーディングシステムで、ペーパート�
 ```php
 [
     'lookback_period' => 20,      // 過去20本（分）の価格データを参照
-    'breakout_threshold' => 0.2,  // ブレイクアウト閾値（%）
+    'breakout_threshold' => 0.1,  // ブレイクアウト閾値（%）
 ]
 ```
 
 **シグナル発生条件:**
-- **買いシグナル**: 現在価格 > 過去20本の最高値 × 1.002
-- **ショートシグナル**: 現在価格 < 過去20本の最安値 × 0.998
+- **買いシグナル**: 現在価格 > 過去20本の最高値 × 1.001
+- **ショートシグナル**: 現在価格 < 過去20本の最安値 × 0.999
 
 **動作フロー:**
 1. **ロング保有中 + 高値ブレイク** → ロング追加（上限3まで）
@@ -145,7 +145,7 @@ TradingSettings::create([
     'strategy' => 'App\\Trading\\Strategy\\HighLowBreakoutStrategy',
     'parameters' => [
         'lookback_period' => 20,
-        'breakout_threshold' => 0.5,
+        'breakout_threshold' => 0.1,
     ],
     'is_active' => true,
 ]);
