@@ -309,6 +309,7 @@ systrading/
 - [CLAUDE.md](CLAUDE.md) - プロジェクト概要と開発ガイドライン
 - [TRADING_STRATEGY.md](TRADING_STRATEGY.md) - トレーディング戦略の詳細
 - [BACKTEST_COMPARISON.md](BACKTEST_COMPARISON.md) - バックテスト結果の比較
+- [TRAILING_STOP_COMPARISON.md](TRAILING_STOP_COMPARISON.md) - トレーリングストップ最適化の検証結果（2025-12-05追加）
 
 ---
 

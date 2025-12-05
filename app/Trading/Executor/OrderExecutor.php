@@ -597,18 +597,15 @@ class OrderExecutor
     }
 
     /**
-     * トレーリングストップを更新（直近20本の高値・安値ベース）
+     * トレーリングストップを更新（現在価格ベース）
      */
     private function updateTrailingStop(string $symbol, array $marketData): void
     {
-        $lookbackPeriod = 20;
         $trailingOffsetPercent = config('trading.defaults.trailing_stop_offset_percent', 0.5);
         $trailingOffset = $trailingOffsetPercent / 100; // パーセントを小数に変換
 
-        // 直近20本の価格から高値・安値を計算
-        $recentPrices = array_slice($marketData['prices'], -$lookbackPeriod);
-        $recentLow = min($recentPrices);
-        $recentHigh = max($recentPrices);
+        // 現在価格を取得
+        $currentPrice = $marketData['current_price'];
 
         // ロングポジションのトレーリングストップ更新
         $longPositions = Position::where('symbol', $symbol)
@@ -617,8 +614,8 @@ class OrderExecutor
             ->get();
 
         foreach ($longPositions as $position) {
-            // トレーリングストップ = 直近安値 - 0.3%
-            $newTrailingStop = $recentLow * (1 - $trailingOffset);
+            // トレーリングストップ = 現在価格 - 0.5%（利益方向のみ追跡）
+            $newTrailingStop = $currentPrice * (1 - $trailingOffset);
 
             // 既存ポジション（trailing_stop_priceがnull）の場合は初期値を設定
             if ($position->trailing_stop_price === null) {
@@ -649,7 +646,7 @@ class OrderExecutor
                     'position_id' => $position->id,
                     'old_stop' => $position->trailing_stop_price,
                     'new_stop' => $newTrailingStop,
-                    'recent_low' => $recentLow,
+                    'current_price' => $currentPrice,
                 ]);
             }
         }
@@ -661,8 +658,8 @@ class OrderExecutor
             ->get();
 
         foreach ($shortPositions as $position) {
-            // トレーリングストップ = 直近高値 + 0.3%
-            $newTrailingStop = $recentHigh * (1 + $trailingOffset);
+            // トレーリングストップ = 現在価格 + 0.5%（利益方向のみ追跡）
+            $newTrailingStop = $currentPrice * (1 + $trailingOffset);
 
             // 既存ポジション（trailing_stop_priceがnull）の場合は初期値を設定
             if ($position->trailing_stop_price === null) {
@@ -693,7 +690,7 @@ class OrderExecutor
                     'position_id' => $position->id,
                     'old_stop' => $position->trailing_stop_price,
                     'new_stop' => $newTrailingStop,
-                    'recent_high' => $recentHigh,
+                    'current_price' => $currentPrice,
                 ]);
             }
         }
