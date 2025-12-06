@@ -46,12 +46,12 @@ class OrderExecutor
                 'recorded_at' => now(),
             ]);
 
-            // 2. 損切りチェック（1%逆行で自動決済）
-            $this->checkStopLoss($symbol, $currentPrice);
-
-            // 3. トレーリングストップの更新と確認
-            $this->updateTrailingStop($symbol, $marketData);
+            // 2. トレーリングストップの更新と確認（優先）
+            $this->updateTrailingStop($symbol, $currentPrice);
             $this->checkTrailingStop($symbol, $currentPrice);
+
+            // 3. 固定損切りチェック（1%逆行で自動決済、最終防衛ライン）
+            $this->checkStopLoss($symbol, $currentPrice);
 
             // 4. ストラテジーで分析
             $signal = $this->strategy->analyze($marketData);
@@ -599,13 +599,10 @@ class OrderExecutor
     /**
      * トレーリングストップを更新（現在価格ベース）
      */
-    private function updateTrailingStop(string $symbol, array $marketData): void
+    private function updateTrailingStop(string $symbol, float $currentPrice): void
     {
         $trailingOffsetPercent = config('trading.defaults.trailing_stop_offset_percent', 0.5);
         $trailingOffset = $trailingOffsetPercent / 100; // パーセントを小数に変換
-
-        // 現在価格を取得
-        $currentPrice = $marketData['current_price'];
 
         // ロングポジションのトレーリングストップ更新
         $longPositions = Position::where('symbol', $symbol)

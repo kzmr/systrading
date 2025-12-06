@@ -52,10 +52,19 @@ class GMOCoinClient implements ExchangeClient
             }
 
             // 今日のデータを取得
-            $todayData = $this->fetchKlines($gmoSymbol, '1min', $today);
-            $prices = array_merge($prices, $todayData);
+            try {
+                $todayData = $this->fetchKlines($gmoSymbol, '1min', $today);
+                $prices = array_merge($prices, $todayData);
+            } catch (\Exception $e) {
+                Log::warning('Failed to fetch today klines', ['error' => $e->getMessage()]);
+            }
 
-            // 最新のlimit件のみを返す
+            // データが取得できなかった場合はエラー
+            if (empty($prices)) {
+                throw new \Exception('No price data available: both yesterday and today fetch failed');
+            }
+
+            // 最新のlimit件のみを返す（取得できたデータ数がlimitより少ない場合もある）
             $prices = array_slice($prices, -$limit);
 
             return [
