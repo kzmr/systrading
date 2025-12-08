@@ -30,19 +30,21 @@ return [
 
     /*
     |--------------------------------------------------------------------------
-    | Default Trading Parameters
+    | Trading Parameters (Deprecated)
     |--------------------------------------------------------------------------
     |
-    | デフォルトの取引パラメータ
+    | 注意: トレーディングパラメータはDBのtrading_settings.parametersで管理
+    | このセクションは後方互換性のために残していますが、新規開発では使用しないでください
+    |
+    | DBで管理するパラメータ:
+    |   - trade_size: 1回の取引サイズ
+    |   - max_positions: 同一方向の最大ポジション数
+    |   - stop_loss_percent: 固定損切り（%）
+    |   - initial_trailing_stop_percent: 初期トレーリングストップ（%）
+    |   - trailing_stop_offset_percent: トレーリングストップオフセット（%）
+    |   - max_spread: 最大許容スプレッド（%）
+    |   - lookback_period: 戦略固有パラメータ
+    |   - breakout_threshold: 戦略固有パラメータ
     |
     */
-    'defaults' => [
-        'trade_size' => env('TRADE_SIZE', 0.01),
-        'max_positions' => env('MAX_POSITIONS', 3),
-        'stop_loss_percent' => env('STOP_LOSS_PERCENT', 1.0),
-        'take_profit_percent' => env('TAKE_PROFIT_PERCENT', 5.0),
-        'max_spread' => env('MAX_SPREAD', 0.1), // 最大許容スプレッド（%）
-        'trailing_stop_offset_percent' => env('TRAILING_STOP_OFFSET_PERCENT', 0.5), // トレーリングストップのオフセット（%）
-        'initial_trailing_stop_percent' => env('INITIAL_TRAILING_STOP_PERCENT', 1.5), // トレーリングストップの初期値（%）
-    ],
 ];

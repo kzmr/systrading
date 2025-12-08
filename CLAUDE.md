@@ -2,6 +2,14 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## 重要: 作業前の確認ルール
+
+**コード変更・設定変更・DB操作などの作業を行う前に、必ずユーザーの確認を求めること。**
+
+- 変更内容の提案 → ユーザーの承認 → 実行 の順序を厳守
+- 軽微な変更でも確認を取る（勝手に実行しない）
+- 確認なしで実行してよいのは、情報収集・分析・調査のみ
+
 ## Project Overview
 
 仮想通貨自動トレーディングシステム（Laravel 12 + PHP 8.3）
@@ -33,11 +41,42 @@ Laravelベースの自動トレーディングシステムで、ペーパート�
 ### Database Tables
 
 - **trading_settings**: 戦略の設定（通貨ペア、パラメータ等）
+  - `parameters`: JSON形式で全てのトレーディングパラメータを管理
 - **positions**: 現在・過去のポジション情報
   - `side`: 'long' または 'short'
   - `status`: 'open' または 'closed'
   - `entry_price`, `exit_price`, `profit_loss`
 - **trading_logs**: 全ての取引実行ログ
+
+## パラメータ管理
+
+**重要: 全てのトレーディングパラメータはDBで一元管理**
+
+`.env`には環境依存の設定（API認証情報等）のみを配置し、トレーディングパラメータは`trading_settings.parameters`で銘柄ごとに管理します。
+
+```json
+// trading_settings.parameters の例
+{
+    "lookback_period": 20,
+    "breakout_threshold": 0.4,
+    "trade_size": 1,
+    "max_positions": 3,
+    "stop_loss_percent": 1.0,
+    "initial_trailing_stop_percent": 0.7,
+    "trailing_stop_offset_percent": 0.5,
+    "max_spread": 0.1
+}
+```
+
+**パラメータの変更方法:**
+```bash
+# SQLiteで直接更新
+sqlite3 database/database.sqlite "UPDATE trading_settings SET parameters = '{...}' WHERE id = 5;"
+
+# または php artisan tinker で更新
+php artisan tinker
+>>> TradingSettings::find(5)->update(['parameters' => [...]])
+```
 
 ## Implemented Strategies
 
@@ -45,33 +84,32 @@ Laravelベースの自動トレーディングシステムで、ペーパート�
 
 現在運用中の主力戦略。過去N本の価格レンジをブレイクした時にエントリー。
 
-**パラメータ（バックテスト最適化済み）:**
-```php
-[
-    'lookback_period' => 20,       // 過去20本（分）の価格データを参照
-    'breakout_threshold' => 0.15,  // ブレイクアウト閾値（%）- 最適化済み
-]
-```
+**パラメータ（DBで管理）:**
 
-**環境変数設定:**
-```bash
-INITIAL_TRAILING_STOP_PERCENT=0.5  # 初期トレーリングS（最適化済み）
-TRAILING_STOP_OFFSET_PERCENT=0.5   # 動的更新オフセット
-```
+| パラメータ | 説明 | 現在値 |
+|-----------|------|--------|
+| lookback_period | 参照する過去データ本数 | 20 |
+| breakout_threshold | ブレイクアウト閾値（%） | 0.4 |
+| trade_size | 1回の取引サイズ | 1 |
+| max_positions | 同一方向の最大ポジション数 | 3 |
+| stop_loss_percent | 固定損切り（%） | 1.0 |
+| initial_trailing_stop_percent | 初期トレーリングストップ（%） | 0.7 |
+| trailing_stop_offset_percent | トレーリングオフセット（%） | 0.5 |
+| max_spread | 最大許容スプレッド（%） | 0.1 |
 
 **シグナル発生条件:**
-- **買いシグナル**: 現在価格 > 過去20本の最高値 × 1.0015
-- **ショートシグナル**: 現在価格 < 過去20本の最安値 × 0.9985
+- **買いシグナル**: 現在価格 > 過去20本の最高値 × 1.004
+- **ショートシグナル**: 現在価格 < 過去20本の最安値 × 0.996
 
 **動作フロー:**
-1. **ロング保有中 + 高値ブレイク** → ロング追加（上限3まで）
+1. **ロング保有中 + 高値ブレイク** → ロング追加（上限まで）
 2. **ロング保有中 + 安値ブレイク** → 全ロング決済 → ショート新規
-3. **ショート保有中 + 安値ブレイク** → ショート追加（上限3まで）
+3. **ショート保有中 + 安値ブレイク** → ショート追加（上限まで）
 4. **ショート保有中 + 高値ブレイク** → 全ショート決済 → ロング新規
 
 **エントリー制限:**
-- 新規エントリー時のみスプレッドチェック（max_spread: 0.1%）
-- 同一方向ポジション数上限: 3
+- 新規エントリー時のみスプレッドチェック
+- 同一方向ポジション数上限（DBで設定）
 - 上限到達時は追加エントリーをスキップ
 
 ## Common Commands
@@ -139,32 +177,27 @@ php artisan config:clear
 
 ### トレーディング設定の登録
 
-データベースに戦略を登録する例：
+データベースに戦略を登録する例（全パラメータをDBで管理）：
 
 ```php
 use App\Models\TradingSettings;
 
-// HighLowBreakoutStrategy の例
+// HighLowBreakoutStrategy の例（全パラメータを含む）
 TradingSettings::create([
     'name' => 'XRP高値安値ブレイク戦略',
     'symbol' => 'XRP/JPY',
     'strategy' => 'App\\Trading\\Strategy\\HighLowBreakoutStrategy',
     'parameters' => [
+        // 戦略固有パラメータ
         'lookback_period' => 20,
-        'breakout_threshold' => 0.1,
-    ],
-    'is_active' => true,
-]);
-
-// SimpleMovingAverageStrategy の例
-TradingSettings::create([
-    'name' => 'BTC移動平均戦略',
-    'symbol' => 'BTC/USDT',
-    'strategy' => 'App\\Trading\\Strategy\\SimpleMovingAverageStrategy',
-    'parameters' => [
-        'short_period' => 5,
-        'long_period' => 20,
-        'trade_size' => 0.01,
+        'breakout_threshold' => 0.4,
+        // リスク管理パラメータ
+        'trade_size' => 1,
+        'max_positions' => 3,
+        'stop_loss_percent' => 1.0,
+        'initial_trailing_stop_percent' => 0.7,
+        'trailing_stop_offset_percent' => 0.5,
+        'max_spread' => 0.1,
     ],
     'is_active' => true,
 ]);

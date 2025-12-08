@@ -27,6 +27,15 @@ class OrderExecutor
     }
 
     /**
+     * 戦略のパラメータを取得（DBから読み込み）
+     */
+    private function getParam(string $key, mixed $default = null): mixed
+    {
+        $params = $this->strategy->getParameters();
+        return $params[$key] ?? $default;
+    }
+
+    /**
      * トレーディングロジックを実行
      *
      * @param string $symbol 通貨ペア
@@ -156,22 +165,25 @@ class OrderExecutor
                 ->where('status', 'open')
                 ->count();
 
-            // 上限チェック（最大3ポジション）
-            if ($longCount >= 3) {
+            // 上限チェック（DBから取得、デフォルト3）
+            $maxPositions = (int) $this->getParam('max_positions', 3);
+            if ($longCount >= $maxPositions) {
                 Log::info('Long position limit reached', [
                     'symbol' => $symbol,
                     'current_count' => $longCount,
+                    'max_positions' => $maxPositions,
                 ]);
 
                 return [
                     'success' => false,
                     'action' => 'buy_rejected',
-                    'message' => "ロングポジション上限到達 ({$longCount}/3) - エントリー見送り",
+                    'message' => "ロングポジション上限到達 ({$longCount}/{$maxPositions}) - エントリー見送り",
                 ];
             }
 
-            // 新規エントリー時はスプレッドをチェック（割合ベース）
-            $maxSpreadPercentage = config('trading.defaults.max_spread_percentage', 0.001); // 0.1%
+            // 新規エントリー時はスプレッドをチェック（割合ベース、DBから取得）
+            $maxSpreadPercent = (float) $this->getParam('max_spread', 0.1); // デフォルト0.1%
+            $maxSpreadPercentage = $maxSpreadPercent / 100; // パーセントを小数に変換
             $currentSpread = $this->exchangeClient->getSpread($symbol);
             $maxSpreadValue = $signal['price'] * $maxSpreadPercentage;
 
@@ -183,7 +195,7 @@ class OrderExecutor
                     'current_price' => $signal['price'],
                     'current_spread' => $currentSpread,
                     'spread_percentage' => $spreadPercentage,
-                    'max_spread_percentage' => $maxSpreadPercentage * 100,
+                    'max_spread_percentage' => $maxSpreadPercent,
                 ]);
 
                 return [
@@ -193,7 +205,7 @@ class OrderExecutor
                         'スプレッド超過 (%.4f円 = %.2f%% > %.2f%%) - エントリー見送り',
                         $currentSpread,
                         $spreadPercentage,
-                        $maxSpreadPercentage * 100
+                        $maxSpreadPercent
                     ),
                 ];
             }
@@ -201,8 +213,8 @@ class OrderExecutor
             $result = $this->exchangeClient->buy($symbol, $signal['quantity'], $signal['price']);
 
             if ($result['success']) {
-                // ポジションを記録（初期トレーリングストップ: config値を使用）
-                $initialTrailingPercent = config('trading.defaults.initial_trailing_stop_percent', 1.5);
+                // ポジションを記録（初期トレーリングストップ: DBから取得）
+                $initialTrailingPercent = (float) $this->getParam('initial_trailing_stop_percent', 0.7);
                 Position::create([
                     'symbol' => $symbol,
                     'side' => 'long',
@@ -310,22 +322,25 @@ class OrderExecutor
                 ->where('status', 'open')
                 ->count();
 
-            // 上限チェック（最大3ポジション）
-            if ($shortCount >= 3) {
+            // 上限チェック（DBから取得、デフォルト3）
+            $maxPositions = (int) $this->getParam('max_positions', 3);
+            if ($shortCount >= $maxPositions) {
                 Log::info('Short position limit reached', [
                     'symbol' => $symbol,
                     'current_count' => $shortCount,
+                    'max_positions' => $maxPositions,
                 ]);
 
                 return [
                     'success' => false,
                     'action' => 'short_rejected',
-                    'message' => "ショートポジション上限到達 ({$shortCount}/3) - エントリー見送り",
+                    'message' => "ショートポジション上限到達 ({$shortCount}/{$maxPositions}) - エントリー見送り",
                 ];
             }
 
-            // 新規ショートエントリー時はスプレッドをチェック（割合ベース）
-            $maxSpreadPercentage = config('trading.defaults.max_spread_percentage', 0.001); // 0.1%
+            // 新規ショートエントリー時はスプレッドをチェック（割合ベース、DBから取得）
+            $maxSpreadPercent = (float) $this->getParam('max_spread', 0.1); // デフォルト0.1%
+            $maxSpreadPercentage = $maxSpreadPercent / 100; // パーセントを小数に変換
             $currentSpread = $this->exchangeClient->getSpread($symbol);
             $maxSpreadValue = $signal['price'] * $maxSpreadPercentage;
 
@@ -337,7 +352,7 @@ class OrderExecutor
                     'current_price' => $signal['price'],
                     'current_spread' => $currentSpread,
                     'spread_percentage' => $spreadPercentage,
-                    'max_spread_percentage' => $maxSpreadPercentage * 100,
+                    'max_spread_percentage' => $maxSpreadPercent,
                 ]);
 
                 return [
@@ -347,7 +362,7 @@ class OrderExecutor
                         'スプレッド超過 (%.4f円 = %.2f%% > %.2f%%) - ショートエントリー見送り',
                         $currentSpread,
                         $spreadPercentage,
-                        $maxSpreadPercentage * 100
+                        $maxSpreadPercent
                     ),
                 ];
             }
@@ -356,8 +371,8 @@ class OrderExecutor
             $result = $this->exchangeClient->sell($symbol, $signal['quantity'], $signal['price']);
 
             if ($result['success']) {
-                // ショートポジションを記録（初期トレーリングストップ: config値を使用）
-                $initialTrailingPercent = config('trading.defaults.initial_trailing_stop_percent', 1.5);
+                // ショートポジションを記録（初期トレーリングストップ: DBから取得）
+                $initialTrailingPercent = (float) $this->getParam('initial_trailing_stop_percent', 0.7);
                 Position::create([
                     'symbol' => $symbol,
                     'side' => 'short',
@@ -394,11 +409,12 @@ class OrderExecutor
     }
 
     /**
-     * 損切りチェック（エントリーから1%逆行で決済）
+     * 損切りチェック（エントリーから指定%逆行で決済）
      */
     private function checkStopLoss(string $symbol, float $currentPrice): void
     {
-        $stopLossPercentage = 0.01; // 1%
+        $stopLossPercent = (float) $this->getParam('stop_loss_percent', 1.0);
+        $stopLossPercentage = $stopLossPercent / 100; // パーセントを小数に変換
 
         // ロングポジションの損切りチェック
         $longPositions = Position::where('symbol', $symbol)
@@ -601,7 +617,7 @@ class OrderExecutor
      */
     private function updateTrailingStop(string $symbol, float $currentPrice): void
     {
-        $trailingOffsetPercent = config('trading.defaults.trailing_stop_offset_percent', 0.5);
+        $trailingOffsetPercent = (float) $this->getParam('trailing_stop_offset_percent', 0.5);
         $trailingOffset = $trailingOffsetPercent / 100; // パーセントを小数に変換
 
         // ロングポジションのトレーリングストップ更新
@@ -616,7 +632,7 @@ class OrderExecutor
 
             // 既存ポジション（trailing_stop_priceがnull）の場合は初期値を設定
             if ($position->trailing_stop_price === null) {
-                $initialTrailingPercent = config('trading.defaults.initial_trailing_stop_percent', 1.5);
+                $initialTrailingPercent = (float) $this->getParam('initial_trailing_stop_percent', 0.7);
                 $initialStop = $position->entry_price * (1 - $initialTrailingPercent / 100);
 
                 $position->update([
@@ -660,7 +676,7 @@ class OrderExecutor
 
             // 既存ポジション（trailing_stop_priceがnull）の場合は初期値を設定
             if ($position->trailing_stop_price === null) {
-                $initialTrailingPercent = config('trading.defaults.initial_trailing_stop_percent', 1.5);
+                $initialTrailingPercent = (float) $this->getParam('initial_trailing_stop_percent', 0.7);
                 $initialStop = $position->entry_price * (1 + $initialTrailingPercent / 100);
 
                 $position->update([

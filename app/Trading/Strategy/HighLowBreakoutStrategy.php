@@ -21,7 +21,7 @@ class HighLowBreakoutStrategy extends TradingStrategy
     {
         $params = $this->getParameters();
         $lookbackPeriod = $params['lookback_period'] ?? 20;
-        $breakoutThreshold = $params['breakout_threshold'] ?? 0.1;
+        $breakoutThreshold = $params['breakout_threshold'] ?? 0.4;
 
         $prices = $marketData['prices'];
         $symbol = $marketData['symbol'];
@@ -41,8 +41,8 @@ class HighLowBreakoutStrategy extends TradingStrategy
             ];
         }
 
-        // スプレッドチェック
-        $maxSpreadPercent = config('trading.defaults.max_spread', 0.1);
+        // スプレッドチェック（DBから取得）
+        $maxSpreadPercent = $params['max_spread'] ?? 0.1;
         if (isset($marketData['bid']) && isset($marketData['ask'])) {
             $bid = (float)$marketData['bid'];
             $ask = (float)$marketData['ask'];
@@ -103,7 +103,7 @@ class HighLowBreakoutStrategy extends TradingStrategy
 
             return [
                 'action' => 'buy',
-                'quantity' => config('trading.defaults.trade_size', 0.01),
+                'quantity' => $params['trade_size'] ?? 1,
                 'price' => null, // 成行注文
             ];
         }
@@ -119,7 +119,7 @@ class HighLowBreakoutStrategy extends TradingStrategy
 
             return [
                 'action' => 'short',
-                'quantity' => config('trading.defaults.trade_size', 0.01),
+                'quantity' => $params['trade_size'] ?? 1,
                 'price' => null, // 成行注文
             ];
         }
