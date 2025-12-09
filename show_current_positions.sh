@@ -1,98 +1,90 @@
 #!/bin/bash
 
-# 通貨ペアを引数から取得（デフォルトはXRP/JPY）
-SYMBOL="${1:-XRP/JPY}"
+# 複数戦略対応のポジション表示スクリプト
+# 使い方:
+#   ./show_current_positions.sh          # 全戦略を表示
+#   ./show_current_positions.sh 5        # trading_settings ID=5 のみ
+#   ./show_current_positions.sh XRP/JPY  # 通貨ペア指定（後方互換）
 
-# 現在の価格を取得
-CURRENT_PRICE=$(php artisan tinker --execute="
-\$client = new \App\Trading\Exchange\GMOCoinClient();
-\$marketData = \$client->getMarketData('${SYMBOL}', 1);
-echo end(\$marketData['prices']);
-" 2>/dev/null | tail -1)
+SETTING_ID="$1"
 
 echo "========================================="
 echo "  現在のポジション詳細"
 echo "========================================="
 echo ""
-echo "現在の${SYMBOL}価格: ${CURRENT_PRICE}円"
+
+# アクティブな戦略一覧を取得
+echo "--- アクティブな戦略 ---"
+sqlite3 -header -column database/database.sqlite <<SQL
+SELECT
+    id as 'ID',
+    symbol as '通貨ペア',
+    name as '戦略名',
+    json_extract(parameters, '$.trade_size') as '取引サイズ'
+FROM trading_settings
+WHERE is_active = 1
+ORDER BY id;
+SQL
+echo ""
+
+# フィルター条件を設定
+if [ -n "$SETTING_ID" ]; then
+    if [[ "$SETTING_ID" =~ ^[0-9]+$ ]]; then
+        # 数字の場合はID指定
+        SYMBOL=$(sqlite3 database/database.sqlite "SELECT symbol FROM trading_settings WHERE id = ${SETTING_ID}")
+        FILTER="AND symbol = '${SYMBOL}'"
+        echo "フィルター: ID=${SETTING_ID} (${SYMBOL})"
+    else
+        # 文字列の場合は通貨ペア指定（後方互換）
+        SYMBOL="$SETTING_ID"
+        FILTER="AND symbol = '${SYMBOL}'"
+        echo "フィルター: ${SYMBOL}"
+    fi
+else
+    FILTER=""
+    echo "フィルター: 全戦略"
+fi
+echo ""
+
+# 各通貨ペアの現在価格を取得して表示
+echo "--- 現在価格 ---"
+SYMBOLS=$(sqlite3 database/database.sqlite "SELECT DISTINCT symbol FROM trading_settings WHERE is_active = 1")
+declare -A PRICES
+for SYM in $SYMBOLS; do
+    PRICE=$(php artisan tinker --execute="
+\$client = new \App\Trading\Exchange\GMOCoinClient();
+\$marketData = \$client->getMarketData('${SYM}', 1);
+echo end(\$marketData['prices']);
+" 2>/dev/null | tail -1)
+    PRICES[$SYM]=$PRICE
+    echo "${SYM}: ${PRICE}円"
+done
 echo ""
 
 # オープンポジションの詳細
 echo "--- オープンポジション ---"
 sqlite3 -header -column database/database.sqlite <<SQL
 SELECT
-    id as 'ID',
-    symbol as '通貨ペア',
-    side as 'サイド',
-    quantity as '数量',
-    entry_price as 'エントリー価格',
-    trailing_stop_price as 'トレーリングS',
-    ROUND(
-        CASE
-            WHEN side = 'long' THEN entry_price * 0.99
-            WHEN side = 'short' THEN entry_price * 1.01
-            ELSE 0
-        END,
-        2
-    ) as '固定損切',
-    ROUND(
-        CASE
-            WHEN side = 'long' THEN ${CURRENT_PRICE} - entry_price
-            WHEN side = 'short' THEN entry_price - ${CURRENT_PRICE}
-            ELSE 0
-        END,
-        2
-    ) as '価格変動',
-    ROUND(
-        CASE
-            WHEN side = 'long' THEN (${CURRENT_PRICE} - entry_price) * quantity
-            WHEN side = 'short' THEN (entry_price - ${CURRENT_PRICE}) * quantity
-            ELSE 0
-        END,
-        4
-    ) as '未実現損益',
-    ROUND(
-        CASE
-            WHEN side = 'long' THEN ((${CURRENT_PRICE} - entry_price) / entry_price * 100)
-            WHEN side = 'short' THEN ((entry_price - ${CURRENT_PRICE}) / entry_price * 100)
-            ELSE 0
-        END,
-        2
-    ) || '%' as '損益率',
-    datetime(opened_at, 'localtime') as 'オープン日時'
-FROM positions
-WHERE status = 'open'
-ORDER BY opened_at DESC;
+    p.id as 'ID',
+    p.symbol as '通貨ペア',
+    p.side as 'サイド',
+    p.quantity as '数量',
+    p.entry_price as 'エントリー',
+    ROUND(p.trailing_stop_price, 3) as 'トレーリングS',
+    datetime(p.opened_at, 'localtime') as 'オープン日時'
+FROM positions p
+WHERE p.status = 'open' ${FILTER}
+ORDER BY p.opened_at DESC;
 SQL
 
 echo ""
 echo "--- オープンポジション合計 ---"
 sqlite3 database/database.sqlite <<SQL
-SELECT
-    'ポジション数: ' || COUNT(*) || '件' as summary
-FROM positions
-WHERE status = 'open'
+SELECT 'ポジション数: ' || COUNT(*) || '件' FROM positions WHERE status = 'open' ${FILTER}
 UNION ALL
-SELECT
-    'ロング: ' || COUNT(*) || '件'
-FROM positions
-WHERE status = 'open' AND side = 'long'
+SELECT 'ロング: ' || COUNT(*) || '件' FROM positions WHERE status = 'open' AND side = 'long' ${FILTER}
 UNION ALL
-SELECT
-    'ショート: ' || COUNT(*) || '件'
-FROM positions
-WHERE status = 'open' AND side = 'short'
-UNION ALL
-SELECT
-    '合計未実現損益: ' || ROUND(SUM(
-        CASE
-            WHEN side = 'long' THEN (${CURRENT_PRICE} - entry_price) * quantity
-            WHEN side = 'short' THEN (entry_price - ${CURRENT_PRICE}) * quantity
-            ELSE 0
-        END
-    ), 4) || '円'
-FROM positions
-WHERE status = 'open';
+SELECT 'ショート: ' || COUNT(*) || '件' FROM positions WHERE status = 'open' AND side = 'short' ${FILTER};
 SQL
 
 echo ""
@@ -103,42 +95,49 @@ SELECT
     symbol as '通貨ペア',
     side as 'サイド',
     quantity as '数量',
-    entry_price as 'エントリー',
-    exit_price as 'エグジット',
-    ROUND(profit_loss, 4) as '損益',
+    ROUND(entry_price, 3) as 'エントリー',
+    ROUND(exit_price, 3) as 'エグジット',
+    ROUND(profit_loss, 2) as '損益',
     ROUND((profit_loss / (entry_price * quantity)) * 100, 2) || '%' as '損益率',
     datetime(closed_at, 'localtime') as 'クローズ日時',
-    ROUND((JULIANDAY(closed_at) - JULIANDAY(opened_at)) * 24, 1) as '保有時間(h)'
+    ROUND((JULIANDAY(closed_at) - JULIANDAY(opened_at)) * 24, 1) as '保有(h)'
 FROM positions
-WHERE status = 'closed'
+WHERE status = 'closed' ${FILTER}
 ORDER BY closed_at DESC
 LIMIT 10;
 SQL
 
 echo ""
-echo "--- 全ポジション統計 ---"
+echo "--- 通貨ペア別統計 ---"
 sqlite3 -header -column database/database.sqlite <<SQL
 SELECT
-    status as 'ステータス',
-    COUNT(*) as '件数',
-    ROUND(SUM(IFNULL(profit_loss, 0)), 4) as '累計損益'
+    symbol as '通貨ペア',
+    COUNT(*) as '取引数',
+    SUM(CASE WHEN profit_loss > 0 THEN 1 ELSE 0 END) as '勝ち',
+    SUM(CASE WHEN profit_loss <= 0 THEN 1 ELSE 0 END) as '負け',
+    ROUND(SUM(CASE WHEN profit_loss > 0 THEN 1.0 ELSE 0 END) / COUNT(*) * 100, 1) || '%' as '勝率',
+    ROUND(SUM(IFNULL(profit_loss, 0)), 2) as '累計損益'
 FROM positions
-GROUP BY status;
+WHERE status = 'closed' ${FILTER}
+GROUP BY symbol;
 SQL
 
 echo ""
 echo "--- 本日の取引統計 ---"
-sqlite3 database/database.sqlite <<SQL
+sqlite3 -header -column database/database.sqlite <<SQL
 SELECT
-    '本日の取引数: ' || COUNT(*) || '件'
-FROM positions
-WHERE DATE(opened_at) = DATE('now', 'localtime')
-UNION ALL
-SELECT
-    '本日の損益: ' || ROUND(IFNULL(SUM(profit_loss), 0), 4) || '円'
+    symbol as '通貨ペア',
+    COUNT(*) as '取引数',
+    ROUND(SUM(IFNULL(profit_loss, 0)), 2) as '損益'
 FROM positions
 WHERE status = 'closed'
-AND DATE(closed_at) = DATE('now', 'localtime');
+AND DATE(closed_at) = DATE('now', 'localtime') ${FILTER}
+GROUP BY symbol
+UNION ALL
+SELECT '合計', COUNT(*), ROUND(SUM(IFNULL(profit_loss, 0)), 2)
+FROM positions
+WHERE status = 'closed'
+AND DATE(closed_at) = DATE('now', 'localtime') ${FILTER};
 SQL
 
 echo ""
