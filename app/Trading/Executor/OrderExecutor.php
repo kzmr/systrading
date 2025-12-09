@@ -123,7 +123,7 @@ class OrderExecutor
                 // 全ショートポジションを一斉決済
                 $totalProfitLoss = 0;
                 foreach ($shortPositions as $shortPosition) {
-                    $closeResult = $this->exchangeClient->buy($symbol, $shortPosition->quantity, $signal['price']);
+                    $closeResult = $this->exchangeClient->buy($symbol, $shortPosition->quantity, null); // 成行注文
 
                     if ($closeResult['success']) {
                         // ショートポジションの損益は逆転: (entry_price - exit_price) * quantity
@@ -210,7 +210,7 @@ class OrderExecutor
                 ];
             }
 
-            $result = $this->exchangeClient->buy($symbol, $signal['quantity'], $signal['price']);
+            $result = $this->exchangeClient->buy($symbol, $signal['quantity'], null); // 成行注文
 
             if ($result['success']) {
                 // ポジションを記録（初期トレーリングストップ: DBから取得）
@@ -245,7 +245,7 @@ class OrderExecutor
         }
 
         if ($signal['action'] === 'sell') {
-            $result = $this->exchangeClient->sell($symbol, $signal['quantity'], $signal['price']);
+            $result = $this->exchangeClient->sell($symbol, $signal['quantity'], null); // 成行注文
 
             if ($result['success']) {
                 // ロングポジションをクローズ
@@ -280,7 +280,7 @@ class OrderExecutor
                 // 全ロングポジションを一斉決済
                 $totalProfitLoss = 0;
                 foreach ($longPositions as $longPosition) {
-                    $closeResult = $this->exchangeClient->sell($symbol, $longPosition->quantity, $signal['price']);
+                    $closeResult = $this->exchangeClient->sell($symbol, $longPosition->quantity, null); // 成行注文
 
                     if ($closeResult['success']) {
                         // ロングポジションの損益計算
@@ -368,7 +368,7 @@ class OrderExecutor
             }
 
             // ショートポジションを開く（売りから入る）
-            $result = $this->exchangeClient->sell($symbol, $signal['quantity'], $signal['price']);
+            $result = $this->exchangeClient->sell($symbol, $signal['quantity'], null); // 成行注文
 
             if ($result['success']) {
                 // ショートポジションを記録（初期トレーリングストップ: DBから取得）
@@ -427,7 +427,7 @@ class OrderExecutor
 
             if ($currentPrice <= $stopLossPrice) {
                 // 損切り実行
-                $sellResult = $this->exchangeClient->sell($symbol, $position->quantity, $currentPrice);
+                $sellResult = $this->exchangeClient->sell($symbol, $position->quantity, null); // 成行注文
 
                 if ($sellResult['success']) {
                     $profitLoss = ($sellResult['price'] - $position->entry_price) * $position->quantity;
@@ -488,7 +488,7 @@ class OrderExecutor
 
             if ($currentPrice >= $stopLossPrice) {
                 // 損切り実行（ショートは買い戻し）
-                $buyResult = $this->exchangeClient->buy($symbol, $position->quantity, $currentPrice);
+                $buyResult = $this->exchangeClient->buy($symbol, $position->quantity, null); // 成行注文
 
                 if ($buyResult['success']) {
                     // ショートポジションの損益: (entry_price - exit_price) * quantity
@@ -723,7 +723,7 @@ class OrderExecutor
         foreach ($longPositions as $position) {
             if ($currentPrice <= $position->trailing_stop_price) {
                 // トレーリングストップで決済
-                $sellResult = $this->exchangeClient->sell($symbol, $position->quantity, $currentPrice);
+                $sellResult = $this->exchangeClient->sell($symbol, $position->quantity, null); // 成行注文
 
                 if ($sellResult['success']) {
                     $profitLoss = ($sellResult['price'] - $position->entry_price) * $position->quantity;
@@ -782,7 +782,7 @@ class OrderExecutor
         foreach ($shortPositions as $position) {
             if ($currentPrice >= $position->trailing_stop_price) {
                 // トレーリングストップで決済（買い戻し）
-                $buyResult = $this->exchangeClient->buy($symbol, $position->quantity, $currentPrice);
+                $buyResult = $this->exchangeClient->buy($symbol, $position->quantity, null); // 成行注文
 
                 if ($buyResult['success']) {
                     // ショートポジションの損益: (entry_price - exit_price) * quantity

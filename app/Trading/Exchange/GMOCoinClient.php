@@ -131,12 +131,18 @@ class GMOCoinClient implements ExchangeClient
 
             Log::info('GMO Coin buy order executed', $result);
 
+            // 成行注文の場合は現在価格を取得
+            $executedPrice = $price;
+            if ($price === null) {
+                $executedPrice = $this->getCurrentPrice($symbol);
+            }
+
             return [
                 'success' => true,
                 'order_id' => $result['data'],
                 'symbol' => $symbol,
                 'quantity' => $quantity,
-                'price' => $price,
+                'price' => $executedPrice,
                 'timestamp' => now()->toIso8601String(),
             ];
         } catch (\Exception $e) {
@@ -176,12 +182,18 @@ class GMOCoinClient implements ExchangeClient
 
             Log::info('GMO Coin sell order executed', $result);
 
+            // 成行注文の場合は現在価格を取得
+            $executedPrice = $price;
+            if ($price === null) {
+                $executedPrice = $this->getCurrentPrice($symbol);
+            }
+
             return [
                 'success' => true,
                 'order_id' => $result['data'],
                 'symbol' => $symbol,
                 'quantity' => $quantity,
-                'price' => $price,
+                'price' => $executedPrice,
                 'timestamp' => now()->toIso8601String(),
             ];
         } catch (\Exception $e) {
@@ -308,6 +320,35 @@ class GMOCoinClient implements ExchangeClient
             Log::error('GMO Coin spread fetch failed', ['error' => $e->getMessage()]);
             // エラー時は大きな値を返して取引を抑制
             return 999999.0;
+        }
+    }
+
+    /**
+     * 現在価格を取得（成行注文の約定価格推定用）
+     */
+    public function getCurrentPrice(string $symbol): float
+    {
+        try {
+            $gmoSymbol = $this->convertSymbol($symbol);
+
+            $response = $this->httpClient->get("{$this->publicBaseUrl}/v1/ticker", [
+                'query' => [
+                    'symbol' => $gmoSymbol,
+                ],
+            ]);
+
+            $data = json_decode($response->getBody()->getContents(), true);
+
+            if ($data['status'] !== 0 || !isset($data['data'][0])) {
+                throw new \Exception("GMO Coin API Error: Failed to get ticker");
+            }
+
+            $ticker = $data['data'][0];
+            // lastは最終取引価格
+            return (float) $ticker['last'];
+        } catch (\Exception $e) {
+            Log::error('GMO Coin current price fetch failed', ['error' => $e->getMessage()]);
+            throw $e;
         }
     }
 
