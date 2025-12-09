@@ -9,6 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - 変更内容の提案 → ユーザーの承認 → 実行 の順序を厳守
 - 軽微な変更でも確認を取る（勝手に実行しない）
 - 確認なしで実行してよいのは、情報収集・分析・調査のみ
+- **git commit & push は必ずユーザーの確認後に実行すること**
 
 ## Project Overview
 
