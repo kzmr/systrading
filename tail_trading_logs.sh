@@ -8,7 +8,16 @@
 
 SETTING_ID="$1"
 OUTPUT_FILE="trading_logs_live.log"
-LARAVEL_LOG="storage/logs/laravel.log"
+
+# Laravelログファイルを検出（日付入りファイル名に対応）
+TODAY=$(date '+%Y-%m-%d')
+if [ -f "storage/logs/laravel-${TODAY}.log" ]; then
+    LARAVEL_LOG="storage/logs/laravel-${TODAY}.log"
+elif [ -f "storage/logs/laravel.log" ]; then
+    LARAVEL_LOG="storage/logs/laravel.log"
+else
+    LARAVEL_LOG=""
+fi
 
 echo "========================================="
 echo "  トレーディングログ リアルタイム監視"
@@ -71,6 +80,7 @@ SQL
 
 echo ""
 echo "--- 最新の戦略分析 ---"
+echo "ログファイル: ${LARAVEL_LOG:-見つかりません}"
 
 # 各戦略の最新分析情報を表示
 SYMBOLS=$(sqlite3 database/database.sqlite "SELECT DISTINCT symbol FROM trading_settings WHERE is_active = 1 AND ${SYMBOL_FILTER}")
@@ -79,7 +89,11 @@ for SYM in $SYMBOLS; do
     # シンボルに応じたログパターンを検索
     SYM_BASE=$(echo "$SYM" | cut -d'/' -f1)  # XRP/JPY -> XRP, BTC/JPY -> BTC
 
-    LATEST_ANALYSIS=$(grep "High-Low Breakout Analysis" "$LARAVEL_LOG" | grep "\"symbol\":\"${SYM}\"" | tail -1)
+    if [ -n "$LARAVEL_LOG" ] && [ -f "$LARAVEL_LOG" ]; then
+        LATEST_ANALYSIS=$(grep "High-Low Breakout Analysis" "$LARAVEL_LOG" | grep "\"symbol\":\"${SYM}\"" | tail -1)
+    else
+        LATEST_ANALYSIS=""
+    fi
 
     if [ -n "$LATEST_ANALYSIS" ]; then
         TIMESTAMP=$(echo "$LATEST_ANALYSIS" | grep -oE '\[.*?\]' | head -1 | tr -d '[]')
@@ -157,7 +171,7 @@ SQL
     fi
 
     # 2. Laravelログの戦略分析情報をチェック
-    if [ -f "$LARAVEL_LOG" ]; then
+    if [ -n "$LARAVEL_LOG" ] && [ -f "$LARAVEL_LOG" ]; then
         CURRENT_LOG_LINE=$(wc -l < "$LARAVEL_LOG")
 
         if [ "$CURRENT_LOG_LINE" -gt "$LAST_LOG_LINE" ]; then
