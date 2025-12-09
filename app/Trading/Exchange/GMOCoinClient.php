@@ -131,15 +131,17 @@ class GMOCoinClient implements ExchangeClient
 
             Log::info('GMO Coin buy order executed', $result);
 
-            // 成行注文の場合は現在価格を取得
+            $orderId = $result['data'];
+
+            // 成行注文の場合は約定情報APIから実際の約定価格を取得
             $executedPrice = $price;
             if ($price === null) {
-                $executedPrice = $this->getCurrentPrice($symbol);
+                $executedPrice = $this->getExecutedPrice($orderId, $symbol);
             }
 
             return [
                 'success' => true,
-                'order_id' => $result['data'],
+                'order_id' => $orderId,
                 'symbol' => $symbol,
                 'quantity' => $quantity,
                 'price' => $executedPrice,
@@ -182,15 +184,17 @@ class GMOCoinClient implements ExchangeClient
 
             Log::info('GMO Coin sell order executed', $result);
 
-            // 成行注文の場合は現在価格を取得
+            $orderId = $result['data'];
+
+            // 成行注文の場合は約定情報APIから実際の約定価格を取得
             $executedPrice = $price;
             if ($price === null) {
-                $executedPrice = $this->getCurrentPrice($symbol);
+                $executedPrice = $this->getExecutedPrice($orderId, $symbol);
             }
 
             return [
                 'success' => true,
-                'order_id' => $result['data'],
+                'order_id' => $orderId,
                 'symbol' => $symbol,
                 'quantity' => $quantity,
                 'price' => $executedPrice,
@@ -246,15 +250,85 @@ class GMOCoinClient implements ExchangeClient
     }
 
     /**
+     * 注文IDから約定情報を取得
+     */
+    public function getExecutionsByOrderId(string $orderId): array
+    {
+        try {
+            $result = $this->sendPrivateRequest('GET', '/v1/executions', [
+                'orderId' => $orderId,
+            ]);
+
+            return $result['data']['list'] ?? [];
+        } catch (\Exception $e) {
+            Log::error('GMO Coin executions fetch failed', [
+                'orderId' => $orderId,
+                'error' => $e->getMessage(),
+            ]);
+            return [];
+        }
+    }
+
+    /**
+     * 約定価格を取得（orderIdから）
+     * 成行注文の実際の約定価格を取得するために使用
+     */
+    public function getExecutedPrice(string $orderId, string $symbol): float
+    {
+        // 約定情報を取得（最大3回リトライ、各500ms待機）
+        for ($i = 0; $i < 3; $i++) {
+            usleep(500000); // 500ms待機（約定処理完了を待つ）
+
+            $executions = $this->getExecutionsByOrderId($orderId);
+
+            if (!empty($executions)) {
+                // 複数約定の場合は加重平均価格を計算
+                $totalValue = 0;
+                $totalSize = 0;
+                foreach ($executions as $execution) {
+                    $price = (float) $execution['price'];
+                    $size = (float) $execution['size'];
+                    $totalValue += $price * $size;
+                    $totalSize += $size;
+                }
+
+                if ($totalSize > 0) {
+                    $avgPrice = $totalValue / $totalSize;
+                    Log::info('Execution price retrieved', [
+                        'orderId' => $orderId,
+                        'avgPrice' => $avgPrice,
+                        'executionCount' => count($executions),
+                    ]);
+                    return $avgPrice;
+                }
+            }
+        }
+
+        // 約定情報が取得できない場合は現在価格を返す（フォールバック）
+        Log::warning('Could not retrieve execution price, using current price', [
+            'orderId' => $orderId,
+        ]);
+        return $this->getCurrentPrice($symbol);
+    }
+
+    /**
      * Private APIリクエストを送信
      */
     private function sendPrivateRequest(string $method, string $path, array $data = []): array
     {
         $timestamp = (string) (time() * 1000);
-        $body = empty($data) ? '' : json_encode($data);
 
-        // 署名を生成
-        $text = $timestamp . $method . $path . $body;
+        // GETの場合はクエリパラメータ、POSTの場合はボディ
+        $queryString = '';
+        $body = '';
+        if ($method === 'GET' && !empty($data)) {
+            $queryString = '?' . http_build_query($data);
+        } elseif (!empty($data)) {
+            $body = json_encode($data);
+        }
+
+        // 署名を生成（GETの場合はクエリ付きパス、POSTの場合はパス+ボディ）
+        $text = $timestamp . $method . $path . $queryString . $body;
         $sign = hash_hmac('sha256', $text, $this->apiSecret);
 
         $options = [
@@ -272,7 +346,7 @@ class GMOCoinClient implements ExchangeClient
 
         $response = $this->httpClient->request(
             $method,
-            $this->privateBaseUrl . $path,
+            $this->privateBaseUrl . $path . $queryString,
             $options
         );
 
