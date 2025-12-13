@@ -31,4 +31,12 @@ abstract class TradingStrategy
     {
         return $this->settings->parameters ?? [];
     }
+
+    /**
+     * 戦略名を取得
+     */
+    public function getName(): string
+    {
+        return $this->settings->name ?? class_basename(static::class);
+    }
 }
