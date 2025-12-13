@@ -21,6 +21,7 @@ class TradingNotification extends Mailable
     public ?float $profitLoss;
     public ?float $profitLossPercent;
     public ?string $reason;
+    public ?string $strategyName;
     public array $additionalData;
 
     /**
@@ -35,6 +36,7 @@ class TradingNotification extends Mailable
         ?float $profitLoss = null,
         ?float $profitLossPercent = null,
         ?string $reason = null,
+        ?string $strategyName = null,
         array $additionalData = []
     ) {
         $this->action = $action;
@@ -45,6 +47,7 @@ class TradingNotification extends Mailable
         $this->profitLoss = $profitLoss;
         $this->profitLossPercent = $profitLossPercent;
         $this->reason = $reason;
+        $this->strategyName = $strategyName;
         $this->additionalData = $additionalData;
     }
 

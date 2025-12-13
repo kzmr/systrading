@@ -46,18 +46,69 @@ else
 fi
 echo ""
 
-# 各通貨ペアの現在価格を取得して表示
-echo "--- 現在価格 ---"
+# 各通貨ペアの現在価格とRSIを取得して表示
+echo "--- 現在価格 & RSI ---"
 SYMBOLS=$(sqlite3 database/database.sqlite "SELECT DISTINCT symbol FROM trading_settings WHERE is_active = 1")
-declare -A PRICES
 for SYM in $SYMBOLS; do
-    PRICE=$(php artisan tinker --execute="
+    # RSI期間を取得（デフォルト14）
+    RSI_PERIOD=$(sqlite3 database/database.sqlite "SELECT COALESCE(json_extract(parameters, '\$.rsi_period'), 14) FROM trading_settings WHERE symbol = '${SYM}' AND is_active = 1 LIMIT 1")
+    # RSI期間が空の場合はデフォルト14
+    if [ -z "$RSI_PERIOD" ]; then
+        RSI_PERIOD=14
+    fi
+
+    # 価格とRSIを取得
+    RESULT=$(php artisan tinker --execute="
 \$client = new \App\Trading\Exchange\GMOCoinClient();
-\$marketData = \$client->getMarketData('${SYM}', 1);
-echo end(\$marketData['prices']);
+\$marketData = \$client->getMarketData('${SYM}', 100);
+\$prices = \$marketData['prices'];
+\$currentPrice = end(\$prices);
+
+// RSI計算
+\$period = ${RSI_PERIOD};
+if (count(\$prices) >= \$period + 1) {
+    \$gains = [];
+    \$losses = [];
+    for (\$i = count(\$prices) - \$period; \$i < count(\$prices); \$i++) {
+        \$change = \$prices[\$i] - \$prices[\$i - 1];
+        if (\$change > 0) {
+            \$gains[] = \$change;
+            \$losses[] = 0;
+        } else {
+            \$gains[] = 0;
+            \$losses[] = abs(\$change);
+        }
+    }
+    \$avgGain = array_sum(\$gains) / \$period;
+    \$avgLoss = array_sum(\$losses) / \$period;
+    if (\$avgLoss == 0) {
+        \$rsi = 100;
+    } else {
+        \$rs = \$avgGain / \$avgLoss;
+        \$rsi = round(100 - (100 / (1 + \$rs)), 2);
+    }
+} else {
+    \$rsi = 'N/A';
+}
+echo \$currentPrice . '|' . \$rsi . '|' . \$period;
 " 2>/dev/null | tail -1)
-    PRICES[$SYM]=$PRICE
-    echo "${SYM}: ${PRICE}円"
+
+    PRICE=$(echo "$RESULT" | cut -d'|' -f1)
+    RSI=$(echo "$RESULT" | cut -d'|' -f2)
+    PERIOD=$(echo "$RESULT" | cut -d'|' -f3)
+
+    # RSI状態を判定
+    RSI_STATUS=""
+    if [ "$RSI" != "N/A" ] && [ -n "$RSI" ]; then
+        RSI_INT=$(echo "$RSI" | cut -d'.' -f1)
+        if [ -n "$RSI_INT" ] && [ "$RSI_INT" -lt 30 ] 2>/dev/null; then
+            RSI_STATUS="(売られすぎ)"
+        elif [ -n "$RSI_INT" ] && [ "$RSI_INT" -gt 70 ] 2>/dev/null; then
+            RSI_STATUS="(買われすぎ)"
+        fi
+    fi
+
+    echo "${SYM}: ${PRICE}円 | RSI(${PERIOD})=${RSI} ${RSI_STATUS}"
 done
 echo ""
 

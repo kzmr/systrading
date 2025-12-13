@@ -55,14 +55,17 @@ class OrderExecutor
                 'recorded_at' => now(),
             ]);
 
-            // 2. トレーリングストップの更新と確認（優先）
+            // 2. 戦略ベースの決済チェック（RSI逆張り等）
+            $this->checkStrategyBasedExit($symbol, $currentPrice);
+
+            // 3. トレーリングストップの更新と確認
             $this->updateTrailingStop($symbol, $currentPrice);
             $this->checkTrailingStop($symbol, $currentPrice);
 
-            // 3. 固定損切りチェック（1%逆行で自動決済、最終防衛ライン）
+            // 4. 固定損切りチェック（1%逆行で自動決済、最終防衛ライン）
             $this->checkStopLoss($symbol, $currentPrice);
 
-            // 4. ストラテジーで分析
+            // 5. ストラテジーで分析
             $signal = $this->strategy->analyze($marketData);
 
             // 成行注文の場合は現在価格をセット（スプレッドチェック用）
@@ -70,10 +73,10 @@ class OrderExecutor
                 $signal['price'] = $currentPrice;
             }
 
-            // 5. シグナルに基づいて注文実行
+            // 6. シグナルに基づいて注文実行
             $result = $this->processSignal($symbol, $signal);
 
-            // 6. ログを記録
+            // 7. ログを記録
             $this->logExecution($symbol, $signal, $result);
 
             return $result;
@@ -409,6 +412,150 @@ class OrderExecutor
     }
 
     /**
+     * 戦略ベースの決済チェック（RSI逆張り等）
+     * 戦略がshouldClosePositionメソッドを持つ場合のみ実行
+     */
+    private function checkStrategyBasedExit(string $symbol, float $currentPrice): void
+    {
+        // 戦略がshouldClosePositionメソッドを持つか確認
+        if (!method_exists($this->strategy, 'shouldClosePosition')) {
+            return;
+        }
+
+        $positions = Position::where('symbol', $symbol)
+            ->where('status', 'open')
+            ->get();
+
+        foreach ($positions as $position) {
+            $exitResult = $this->strategy->shouldClosePosition($position, $currentPrice);
+
+            if ($exitResult === null) {
+                continue;
+            }
+
+            $reason = $exitResult['reason'] ?? 'strategy_exit';
+
+            // ロングポジションの決済
+            if ($position->side === 'long') {
+                $sellResult = $this->exchangeClient->sell($symbol, $position->quantity, null);
+
+                if ($sellResult['success']) {
+                    $profitLoss = ($sellResult['price'] - $position->entry_price) * $position->quantity;
+
+                    $position->update([
+                        'exit_price' => $sellResult['price'],
+                        'status' => 'closed',
+                        'closed_at' => now(),
+                        'profit_loss' => $profitLoss,
+                    ]);
+
+                    $reasonMessage = $this->getExitReasonMessage($reason, $exitResult);
+
+                    Log::info('Strategy-based exit - Long position closed', [
+                        'symbol' => $symbol,
+                        'position_id' => $position->id,
+                        'reason' => $reason,
+                        'entry_price' => $position->entry_price,
+                        'exit_price' => $sellResult['price'],
+                        'profit_loss' => $profitLoss,
+                        'details' => $exitResult,
+                    ]);
+
+                    TradingLog::create([
+                        'symbol' => $symbol,
+                        'action' => 'strategy_exit_sell',
+                        'quantity' => $position->quantity,
+                        'price' => $sellResult['price'],
+                        'message' => sprintf(
+                            '%s - ロング決済 (エントリー: %.2f円 → 決済: %.2f円, 損益: %.4f円)',
+                            $reasonMessage,
+                            $position->entry_price,
+                            $sellResult['price'],
+                            $profitLoss
+                        ),
+                        'executed_at' => now(),
+                    ]);
+
+                    $this->sendNotification(
+                        'exit',
+                        $symbol,
+                        'long',
+                        $sellResult['price'],
+                        $position->quantity,
+                        $profitLoss,
+                        $reasonMessage
+                    );
+                }
+            }
+
+            // ショートポジションの決済
+            if ($position->side === 'short') {
+                $buyResult = $this->exchangeClient->buy($symbol, $position->quantity, null);
+
+                if ($buyResult['success']) {
+                    $profitLoss = ($position->entry_price - $buyResult['price']) * $position->quantity;
+
+                    $position->update([
+                        'exit_price' => $buyResult['price'],
+                        'status' => 'closed',
+                        'closed_at' => now(),
+                        'profit_loss' => $profitLoss,
+                    ]);
+
+                    $reasonMessage = $this->getExitReasonMessage($reason, $exitResult);
+
+                    Log::info('Strategy-based exit - Short position closed', [
+                        'symbol' => $symbol,
+                        'position_id' => $position->id,
+                        'reason' => $reason,
+                        'entry_price' => $position->entry_price,
+                        'exit_price' => $buyResult['price'],
+                        'profit_loss' => $profitLoss,
+                        'details' => $exitResult,
+                    ]);
+
+                    TradingLog::create([
+                        'symbol' => $symbol,
+                        'action' => 'strategy_exit_buy',
+                        'quantity' => $position->quantity,
+                        'price' => $buyResult['price'],
+                        'message' => sprintf(
+                            '%s - ショート決済 (エントリー: %.2f円 → 決済: %.2f円, 損益: %.4f円)',
+                            $reasonMessage,
+                            $position->entry_price,
+                            $buyResult['price'],
+                            $profitLoss
+                        ),
+                        'executed_at' => now(),
+                    ]);
+
+                    $this->sendNotification(
+                        'exit',
+                        $symbol,
+                        'short',
+                        $buyResult['price'],
+                        $position->quantity,
+                        $profitLoss,
+                        $reasonMessage
+                    );
+                }
+            }
+        }
+    }
+
+    /**
+     * 決済理由のメッセージを取得
+     */
+    private function getExitReasonMessage(string $reason, array $details): string
+    {
+        return match ($reason) {
+            'rsi_take_profit' => sprintf('RSI利確 (RSI=%.2f)', $details['rsi'] ?? 0),
+            'timeout' => sprintf('タイムアウト決済 (%d分経過)', $details['hold_minutes'] ?? 0),
+            default => '戦略ベース決済',
+        };
+    }
+
+    /**
      * 損切りチェック（エントリーから指定%逆行で決済）
      */
     private function checkStopLoss(string $symbol, float $currentPrice): void
@@ -586,6 +733,9 @@ class OrderExecutor
                 }
             }
 
+            // 戦略名を取得
+            $strategyName = $this->strategy->getName();
+
             Mail::to($email)->send(new TradingNotification(
                 action: $action,
                 side: $side,
@@ -594,7 +744,8 @@ class OrderExecutor
                 quantity: $quantity,
                 profitLoss: $profitLoss,
                 profitLossPercent: $profitLossPercent,
-                reason: $reason
+                reason: $reason,
+                strategyName: $strategyName
             ));
 
             Log::info('Trading notification sent', [

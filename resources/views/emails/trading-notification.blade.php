@@ -103,6 +103,13 @@
 
     <div class="content">
         <div class="info-box {{ $action === 'entry' ? 'entry' : 'exit' }}">
+            @if($strategyName)
+                <div class="info-row">
+                    <span class="info-label">戦略</span>
+                    <span class="info-value"><strong>{{ $strategyName }}</strong></span>
+                </div>
+            @endif
+
             <div class="info-row">
                 <span class="info-label">アクション</span>
                 <span class="info-value">
