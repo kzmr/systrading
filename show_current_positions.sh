@@ -50,11 +50,11 @@ echo ""
 echo "--- 現在価格 & RSI ---"
 SYMBOLS=$(sqlite3 database/database.sqlite "SELECT DISTINCT symbol FROM trading_settings WHERE is_active = 1")
 for SYM in $SYMBOLS; do
-    # RSI期間を取得（デフォルト14）
-    RSI_PERIOD=$(sqlite3 database/database.sqlite "SELECT COALESCE(json_extract(parameters, '\$.rsi_period'), 14) FROM trading_settings WHERE symbol = '${SYM}' AND is_active = 1 LIMIT 1")
-    # RSI期間が空の場合はデフォルト14
+    # RSI期間を取得（RSI戦略を優先、なければデフォルト60）
+    RSI_PERIOD=$(sqlite3 database/database.sqlite "SELECT COALESCE(json_extract(parameters, '\$.rsi_period'), 60) FROM trading_settings WHERE symbol = '${SYM}' AND is_active = 1 AND strategy LIKE '%RSIContrarian%' LIMIT 1")
+    # RSI戦略がない場合はデフォルト60
     if [ -z "$RSI_PERIOD" ]; then
-        RSI_PERIOD=14
+        RSI_PERIOD=60
     fi
 
     # 価格とRSIを取得
