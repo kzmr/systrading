@@ -39,4 +39,12 @@ abstract class TradingStrategy
     {
         return $this->settings->name ?? class_basename(static::class);
     }
+
+    /**
+     * 戦略設定IDを取得
+     */
+    public function getSettingsId(): int
+    {
+        return $this->settings->id;
+    }
 }

@@ -220,6 +220,7 @@ class OrderExecutor
                 $initialTrailingPercent = (float) $this->getParam('initial_trailing_stop_percent', 0.7);
                 Position::create([
                     'symbol' => $symbol,
+                    'trading_settings_id' => $this->strategy->getSettingsId(),
                     'side' => 'long',
                     'quantity' => $signal['quantity'],
                     'entry_price' => $result['price'],
@@ -378,6 +379,7 @@ class OrderExecutor
                 $initialTrailingPercent = (float) $this->getParam('initial_trailing_stop_percent', 0.7);
                 Position::create([
                     'symbol' => $symbol,
+                    'trading_settings_id' => $this->strategy->getSettingsId(),
                     'side' => 'short',
                     'quantity' => $signal['quantity'],
                     'entry_price' => $result['price'],
