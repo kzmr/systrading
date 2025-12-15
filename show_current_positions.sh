@@ -139,23 +139,25 @@ SELECT 'ショート: ' || COUNT(*) || '件' FROM positions WHERE status = 'open
 SQL
 
 echo ""
-echo "--- 最新10件のクローズ済みポジション ---"
+echo "--- 最新30件のクローズ済みポジション ---"
 sqlite3 -header -column database/database.sqlite <<SQL
 SELECT
-    id as 'ID',
-    symbol as '通貨ペア',
-    side as 'サイド',
-    quantity as '数量',
-    ROUND(entry_price, 3) as 'エントリー',
-    ROUND(exit_price, 3) as 'エグジット',
-    ROUND(profit_loss, 2) as '損益',
-    ROUND((profit_loss / (entry_price * quantity)) * 100, 2) || '%' as '損益率',
-    datetime(closed_at, 'localtime') as 'クローズ日時',
-    ROUND((JULIANDAY(closed_at) - JULIANDAY(opened_at)) * 24, 1) as '保有(h)'
-FROM positions
-WHERE status = 'closed' ${FILTER}
-ORDER BY closed_at DESC
-LIMIT 10;
+    p.id as 'ID',
+    p.symbol as '通貨ペア',
+    COALESCE(ts.name, '-') as '戦略',
+    p.side as 'サイド',
+    p.quantity as '数量',
+    ROUND(p.entry_price, 3) as 'エントリー',
+    ROUND(p.exit_price, 3) as 'エグジット',
+    ROUND(p.profit_loss, 2) as '損益',
+    ROUND((p.profit_loss / (p.entry_price * p.quantity)) * 100, 2) || '%' as '損益率',
+    datetime(p.closed_at, 'localtime') as 'クローズ日時',
+    ROUND((JULIANDAY(p.closed_at) - JULIANDAY(p.opened_at)) * 24, 1) as '保有(h)'
+FROM positions p
+LEFT JOIN trading_settings ts ON p.trading_settings_id = ts.id
+WHERE p.status = 'closed' ${FILTER}
+ORDER BY p.closed_at DESC
+LIMIT 30;
 SQL
 
 echo ""
