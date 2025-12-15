@@ -422,8 +422,10 @@ class OrderExecutor
             return;
         }
 
+        // 自分の戦略で作成したポジションのみを対象にする
         $positions = Position::where('symbol', $symbol)
             ->where('status', 'open')
+            ->where('trading_settings_id', $this->strategy->getSettingsId())
             ->get();
 
         foreach ($positions as $position) {
