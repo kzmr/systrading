@@ -23,8 +23,9 @@ Laravelベースの自動トレーディングシステムで、ペーパート�
 
 1. **Strategy Layer** (`app/Trading/Strategy/`)
    - `TradingStrategy.php`: 戦略の基底クラス
+   - `RSIContrarianStrategy.php`: RSI逆張り戦略（現在運用中）
+   - `HighLowBreakoutStrategy.php`: 高値安値ブレイクアウト戦略
    - `SimpleMovingAverageStrategy.php`: 移動平均線戦略の実装例
-   - `HighLowBreakoutStrategy.php`: 高値安値ブレイクアウト戦略（現在運用中）
    - 新しい戦略を追加する場合は`TradingStrategy`を継承
 
 2. **Exchange Layer** (`app/Trading/Exchange/`)
@@ -44,10 +45,12 @@ Laravelベースの自動トレーディングシステムで、ペーパート�
 - **trading_settings**: 戦略の設定（通貨ペア、パラメータ等）
   - `parameters`: JSON形式で全てのトレーディングパラメータを管理
 - **positions**: 現在・過去のポジション情報
+  - `trading_settings_id`: どの戦略で作成されたか（外部キー）
   - `side`: 'long' または 'short'
   - `status`: 'open' または 'closed'
-  - `entry_price`, `exit_price`, `profit_loss`
+  - `entry_price`, `exit_price`, `profit_loss`, `trailing_stop_price`
 - **trading_logs**: 全ての取引実行ログ
+- **price_history**: 価格履歴（バックテスト用）
 
 ## パラメータ管理
 
@@ -81,9 +84,42 @@ php artisan tinker
 
 ## Implemented Strategies
 
+### RSIContrarianStrategy（RSI逆張り戦略）【現在運用中】
+
+RSI（相対力指数）を使った逆張り戦略。売られすぎ・買われすぎの水準で反転を狙う。
+
+**パラメータ（DBで管理）:**
+
+| パラメータ | 説明 | 現在値 |
+|-----------|------|--------|
+| rsi_period | RSI計算期間 | 60 |
+| rsi_oversold | 売られすぎ閾値 | 30 |
+| rsi_overbought | 買われすぎ閾値 | 70 |
+| rsi_exit_threshold | 決済RSI閾値 | 50 |
+| trade_size | 1回の取引サイズ | 1（XRP）, 0.001（BTC）, 0.01（ETH） |
+| max_positions | 最大ポジション数 | 1 |
+| max_hold_minutes | 最大保有時間（分） | 60 |
+| stop_loss_percent | 固定損切り（%） | 1.0 |
+
+**シグナル発生条件:**
+- **買いシグナル**: RSI < 30（売られすぎ）
+- **ショートシグナル**: RSI > 70（買われすぎ）
+
+**決済条件（shouldClosePositionメソッド）:**
+1. **RSI利確**: ロング時にRSI≥50、ショート時にRSI≤50
+2. **タイムアウト**: 60分経過で強制決済
+3. **損切り**: 1%逆行で損切り（共通機能）
+
+**運用中の戦略:**
+- XRP RSI逆張り戦略（ID:6）
+- BTC RSI逆張り戦略（ID:7）
+- ETH RSI逆張り戦略（ID:8）
+
+---
+
 ### HighLowBreakoutStrategy（高値安値ブレイクアウト戦略）
 
-現在運用中の主力戦略。過去N本の価格レンジをブレイクした時にエントリー。
+過去N本の価格レンジをブレイクした時にエントリー。トレンドフォロー型。
 
 **パラメータ（DBで管理）:**
 
@@ -140,10 +176,13 @@ php artisan config:clear
 プロジェクトルートにある便利なシェルスクリプト：
 
 ```bash
-# 現在のポジション状況を表示
-./show_current_positions.sh [通貨ペア]
-# 例: ./show_current_positions.sh XRP/JPY
-# 出力: オープンポジション、損益、保有時間、最新のクローズ済みポジション等
+# 現在のポジション状況を表示（複数戦略対応）
+./show_current_positions.sh [戦略ID or 通貨ペア]
+# 例: ./show_current_positions.sh         # 全戦略を表示
+# 例: ./show_current_positions.sh 6       # ID=6の戦略のみ
+# 例: ./show_current_positions.sh XRP/JPY # 通貨ペア指定（後方互換）
+# 出力: アクティブな戦略一覧、現在価格&RSI、オープンポジション、
+#       クローズ済みポジション（戦略名付き、最新30件）、統計情報
 
 # トレーディングログをファイルに保存
 ./show_trading_logs.sh [通貨ペア] [件数]
@@ -183,7 +222,30 @@ php artisan config:clear
 ```php
 use App\Models\TradingSettings;
 
-// HighLowBreakoutStrategy の例（全パラメータを含む）
+// RSIContrarianStrategy の例（現在運用中）
+TradingSettings::create([
+    'name' => 'XRP RSI逆張り戦略',
+    'symbol' => 'XRP/JPY',
+    'strategy' => 'App\\Trading\\Strategy\\RSIContrarianStrategy',
+    'parameters' => [
+        // RSI固有パラメータ
+        'rsi_period' => 60,
+        'rsi_oversold' => 30,
+        'rsi_overbought' => 70,
+        'rsi_exit_threshold' => 50,
+        'max_hold_minutes' => 60,
+        // リスク管理パラメータ
+        'trade_size' => 1,
+        'max_positions' => 1,
+        'stop_loss_percent' => 1.0,
+        'initial_trailing_stop_percent' => 0.7,
+        'trailing_stop_offset_percent' => 0.5,
+        'max_spread' => 0.1,
+    ],
+    'is_active' => true,
+]);
+
+// HighLowBreakoutStrategy の例
 TradingSettings::create([
     'name' => 'XRP高値安値ブレイク戦略',
     'symbol' => 'XRP/JPY',
@@ -241,8 +303,17 @@ EXCHANGE_API_SECRET=your_binance_api_secret
        'price' => null, // null = 成行注文
    ];
    ```
-4. データベースの`trading_settings`に戦略を登録
-5. `php artisan trading:execute`でテスト
+4. **（オプション）戦略独自の決済ロジック**: `shouldClosePosition()`メソッドを実装
+   ```php
+   // RSI利確やタイムアウト等、戦略固有の決済条件を定義
+   public function shouldClosePosition(Position $position, float $currentPrice): ?array
+   {
+       // 決済すべき場合: ['reason' => 'xxx', ...]を返す
+       // 決済不要の場合: nullを返す
+   }
+   ```
+5. データベースの`trading_settings`に戦略を登録
+6. `php artisan trading:execute`でテスト
 
 ### 新しい取引所に対応
 
@@ -295,7 +366,7 @@ EXCHANGE_API_SECRET=your_binance_api_secret
   - 日本の仮想通貨取引所
   - APIドキュメント: https://api.coin.z.com/docs/
   - 対応通貨ペア: BTC/JPY, ETH/JPY, XRP/JPY, LTC/JPY, BCH/JPY等
-  - 現在運用中: XRP/JPY（ペーパートレード）
+  - 現在運用中: XRP/JPY, BTC/JPY, ETH/JPY（RSI逆張り戦略）
 
 - **Binance** (`EXCHANGE_NAME=binance`)
   - 世界最大の仮想通貨取引所
@@ -327,6 +398,16 @@ EXCHANGE_API_SECRET=your_binance_api_secret
 - **モード切り替え**: 環境変数でペーパー/ライブを切り替え、同一コードベースで運用
 - **複数ポジション管理**: トレンドフォロー戦略に対応した柔軟なポジション管理
 - **戦略独立性**: StrategyレイヤーはExecutorレイヤーから完全に独立し、再利用可能
+- **マルチ戦略対応**: 同一通貨ペアで複数戦略を運用可能、各戦略は自分のポジションのみ管理
+
+### マルチ戦略運用時の注意
+
+同一通貨ペアで複数の戦略を運用する場合：
+
+1. **ポジション分離**: 各戦略は`trading_settings_id`で自分が作成したポジションのみを管理
+2. **戦略ベース決済**: `shouldClosePosition`を持つ戦略（RSI等）は自分のポジションのみ決済
+3. **共通リスク管理**: 損切り・トレーリングストップは全ポジションに適用（戦略問わず）
+4. **通知の区別**: エントリー/エグジット通知に戦略名が含まれる
 
 ## Troubleshooting
 
