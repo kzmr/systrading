@@ -8,6 +8,7 @@ class Position extends Model
 {
     protected $fillable = [
         'symbol',
+        'trading_settings_id',
         'side',
         'quantity',
         'entry_price',
