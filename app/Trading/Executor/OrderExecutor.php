@@ -614,7 +614,7 @@ class OrderExecutor
                         'executed_at' => now(),
                     ]);
 
-                    // エグジット通知を送信
+                    // エグジット通知を送信（元の戦略名を使用）
                     $this->sendNotification(
                         'exit',
                         $symbol,
@@ -622,7 +622,8 @@ class OrderExecutor
                         $sellResult['price'],
                         $position->quantity,
                         $profitLoss,
-                        '損切り実行 - 1%ストップロス到達'
+                        '損切り実行 - 1%ストップロス到達',
+                        $this->getPositionStrategyName($position)
                     );
                 }
             }
@@ -676,7 +677,7 @@ class OrderExecutor
                         'executed_at' => now(),
                     ]);
 
-                    // エグジット通知を送信
+                    // エグジット通知を送信（元の戦略名を使用）
                     $this->sendNotification(
                         'exit',
                         $symbol,
@@ -684,7 +685,8 @@ class OrderExecutor
                         $buyResult['price'],
                         $position->quantity,
                         $profitLoss,
-                        '損切り実行 - 1%ストップロス到達'
+                        '損切り実行 - 1%ストップロス到達',
+                        $this->getPositionStrategyName($position)
                     );
                 }
             }
@@ -708,6 +710,20 @@ class OrderExecutor
     }
 
     /**
+     * ポジションの元の戦略名を取得
+     */
+    private function getPositionStrategyName(Position $position): string
+    {
+        if ($position->trading_settings_id) {
+            $settings = TradingSettings::find($position->trading_settings_id);
+            if ($settings) {
+                return $settings->name;
+            }
+        }
+        return $this->strategy->getName();
+    }
+
+    /**
      * メール通知を送信
      */
     private function sendNotification(
@@ -717,7 +733,8 @@ class OrderExecutor
         float $price,
         float $quantity,
         ?float $profitLoss = null,
-        ?string $reason = null
+        ?string $reason = null,
+        ?string $strategyName = null
     ): void {
         if (!env('TRADING_NOTIFICATION_ENABLED', false)) {
             return;
@@ -737,8 +754,8 @@ class OrderExecutor
                 }
             }
 
-            // 戦略名を取得
-            $strategyName = $this->strategy->getName();
+            // 戦略名を取得（指定がなければ現在の戦略名を使用）
+            $strategyName = $strategyName ?? $this->strategy->getName();
 
             Mail::to($email)->send(new TradingNotification(
                 action: $action,
@@ -914,7 +931,7 @@ class OrderExecutor
                         'executed_at' => now(),
                     ]);
 
-                    // エグジット通知を送信
+                    // エグジット通知を送信（元の戦略名を使用）
                     $this->sendNotification(
                         'exit',
                         $symbol,
@@ -922,7 +939,8 @@ class OrderExecutor
                         $sellResult['price'],
                         $position->quantity,
                         $profitLoss,
-                        'トレーリングストップ到達'
+                        'トレーリングストップ到達',
+                        $this->getPositionStrategyName($position)
                     );
                 }
             }
@@ -974,7 +992,7 @@ class OrderExecutor
                         'executed_at' => now(),
                     ]);
 
-                    // エグジット通知を送信
+                    // エグジット通知を送信（元の戦略名を使用）
                     $this->sendNotification(
                         'exit',
                         $symbol,
@@ -982,7 +1000,8 @@ class OrderExecutor
                         $buyResult['price'],
                         $position->quantity,
                         $profitLoss,
-                        'トレーリングストップ到達'
+                        'トレーリングストップ到達',
+                        $this->getPositionStrategyName($position)
                     );
                 }
             }
