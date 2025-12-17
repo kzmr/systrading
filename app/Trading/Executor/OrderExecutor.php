@@ -5,6 +5,7 @@ namespace App\Trading\Executor;
 use App\Models\Position;
 use App\Models\PriceHistory;
 use App\Models\TradingLog;
+use App\Models\TradingSettings;
 use App\Trading\Exchange\ExchangeClient;
 use App\Trading\Strategy\TradingStrategy;
 use Illuminate\Support\Facades\Log;
