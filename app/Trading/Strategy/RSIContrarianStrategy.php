@@ -3,6 +3,7 @@
 namespace App\Trading\Strategy;
 
 use App\Models\Position;
+use App\Models\TradingSettings;
 use Illuminate\Support\Facades\Log;
 
 /**
@@ -16,10 +17,63 @@ use Illuminate\Support\Facades\Log;
  * - 買いポジション: RSI > 50 で利確
  * - ショートポジション: RSI < 50 で利確
  * - タイムアウト: max_hold_minutes 経過で強制決済
+ *
+ * クールダウン機能:
+ * - RSI逆張り戦略で負けトレードが発生した場合、全通貨ペアで一定時間エントリーをスキップ
+ * - デフォルト: 30分間
  */
 class RSIContrarianStrategy extends TradingStrategy
 {
     private ?float $currentRSI = null;
+
+    /**
+     * クールダウン中かどうかをチェック
+     *
+     * RSI逆張り戦略で負けトレードがあった場合、指定時間内はエントリーをスキップ
+     * 全通貨ペアに適用（仮想通貨は相関が高いため）
+     *
+     * @param int $cooldownMinutes クールダウン時間（分）
+     * @return bool クールダウン中の場合true
+     */
+    private function isInCooldown(int $cooldownMinutes): bool
+    {
+        if ($cooldownMinutes <= 0) {
+            return false;
+        }
+
+        $cooldownThreshold = now()->subMinutes($cooldownMinutes);
+
+        // RSI逆張り戦略の全設定IDを取得
+        $rsiStrategyIds = TradingSettings::where('strategy', 'like', '%RSIContrarianStrategy%')
+            ->pluck('id')
+            ->toArray();
+
+        if (empty($rsiStrategyIds)) {
+            return false;
+        }
+
+        // 指定時間内に負けトレード（profit_loss < 0）があるかチェック
+        // 通貨ペアによらず、RSI逆張り戦略全体でチェック
+        $recentLoss = Position::where('status', 'closed')
+            ->whereIn('trading_settings_id', $rsiStrategyIds)
+            ->where('profit_loss', '<', 0)
+            ->where('closed_at', '>=', $cooldownThreshold)
+            ->first();
+
+        if ($recentLoss) {
+            Log::info('RSI Contrarian Cooldown Active', [
+                'recent_loss_id' => $recentLoss->id,
+                'recent_loss_symbol' => $recentLoss->symbol,
+                'recent_loss_profit' => $recentLoss->profit_loss,
+                'closed_at' => $recentLoss->closed_at,
+                'cooldown_until' => $recentLoss->closed_at->addMinutes($cooldownMinutes)->format('Y-m-d H:i:s'),
+            ]);
+            return true;
+        }
+
+        return false;
+    }
+
     /**
      * RSIを計算
      *
@@ -75,6 +129,7 @@ class RSIContrarianStrategy extends TradingStrategy
         $rsiPeriod = $params['rsi_period'] ?? 14;
         $rsiOversold = $params['rsi_oversold'] ?? 30;
         $rsiOverbought = $params['rsi_overbought'] ?? 70;
+        $cooldownMinutes = $params['cooldown_minutes'] ?? 30;
 
         $prices = $marketData['prices'];
         $symbol = $marketData['symbol'];
@@ -147,8 +202,27 @@ class RSIContrarianStrategy extends TradingStrategy
             'overbought_threshold' => $rsiOverbought,
         ]);
 
+        // クールダウンチェック（エントリーシグナル発生時のみ）
+        $shouldBuy = $rsi < $rsiOversold;
+        $shouldShort = $rsi > $rsiOverbought;
+
+        if (($shouldBuy || $shouldShort) && $this->isInCooldown($cooldownMinutes)) {
+            Log::info('RSI Contrarian Entry Skipped - Cooldown Active', [
+                'symbol' => $symbol,
+                'rsi' => $rsi,
+                'would_be_action' => $shouldBuy ? 'buy' : 'short',
+                'cooldown_minutes' => $cooldownMinutes,
+            ]);
+
+            return [
+                'action' => 'hold',
+                'quantity' => 0,
+                'price' => null,
+            ];
+        }
+
         // RSI < 30（売られすぎ）→ 買いシグナル
-        if ($rsi < $rsiOversold) {
+        if ($shouldBuy) {
             Log::info('RSI OVERSOLD - BUY SIGNAL', [
                 'symbol' => $symbol,
                 'current_price' => $currentPrice,
@@ -164,7 +238,7 @@ class RSIContrarianStrategy extends TradingStrategy
         }
 
         // RSI > 70（買われすぎ）→ ショートシグナル
-        if ($rsi > $rsiOverbought) {
+        if ($shouldShort) {
             Log::info('RSI OVERBOUGHT - SHORT SIGNAL', [
                 'symbol' => $symbol,
                 'current_price' => $currentPrice,
