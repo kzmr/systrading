@@ -22,6 +22,9 @@ class HighLowBreakoutStrategy extends TradingStrategy
         $params = $this->getParameters();
         $lookbackPeriod = $params['lookback_period'] ?? 20;
         $breakoutThreshold = $params['breakout_threshold'] ?? 0.4;
+        $trendFilterEnabled = $params['trend_filter_enabled'] ?? true;
+        $trendMaPeriod = $params['trend_ma_period'] ?? 60;
+        $trendThreshold = $params['trend_threshold'] ?? 0.3;
 
         $prices = $marketData['prices'];
         $symbol = $marketData['symbol'];
@@ -82,6 +85,9 @@ class HighLowBreakoutStrategy extends TradingStrategy
         $buyThreshold = $highestHigh * (1 + $breakoutThreshold / 100);
         $sellThreshold = $lowestLow * (1 - $breakoutThreshold / 100);
 
+        // トレンド判定
+        $trend = $trendFilterEnabled ? $this->detectTrend($prices, $trendMaPeriod, $trendThreshold) : 'range';
+
         Log::info('High-Low Breakout Analysis', [
             'symbol' => $symbol,
             'current_price' => $currentPrice,
@@ -90,38 +96,60 @@ class HighLowBreakoutStrategy extends TradingStrategy
             'buy_threshold' => $buyThreshold,
             'sell_threshold' => $sellThreshold,
             'lookback_period' => $lookbackPeriod,
+            'trend' => $trend,
+            'trend_filter_enabled' => $trendFilterEnabled,
         ]);
 
-        // 高値ブレイクアウト → 買いシグナル
+        // 高値ブレイクアウト → 買いシグナル（下落トレンド時はスキップ）
         if ($currentPrice > $buyThreshold) {
-            Log::info('HIGH BREAKOUT - BUY SIGNAL', [
-                'symbol' => $symbol,
-                'current_price' => $currentPrice,
-                'buy_threshold' => $buyThreshold,
-                'breakout' => ($currentPrice - $highestHigh) / $highestHigh * 100 . '%',
-            ]);
+            if ($trendFilterEnabled && $trend === 'down') {
+                Log::info('HIGH BREAKOUT Skipped - Trend Filter (down trend, no long)', [
+                    'symbol' => $symbol,
+                    'current_price' => $currentPrice,
+                    'buy_threshold' => $buyThreshold,
+                    'trend' => $trend,
+                ]);
+            } else {
+                Log::info('HIGH BREAKOUT - BUY SIGNAL', [
+                    'symbol' => $symbol,
+                    'current_price' => $currentPrice,
+                    'buy_threshold' => $buyThreshold,
+                    'breakout' => ($currentPrice - $highestHigh) / $highestHigh * 100 . '%',
+                    'trend' => $trend,
+                ]);
 
-            return [
-                'action' => 'buy',
-                'quantity' => $params['trade_size'] ?? 1,
-                'price' => null, // 成行注文
-            ];
+                return [
+                    'action' => 'buy',
+                    'quantity' => $params['trade_size'] ?? 1,
+                    'price' => null, // 成行注文
+                ];
+            }
         }
 
-        // 安値ブレイクダウン → ショート売りシグナル
+        // 安値ブレイクダウン → ショート売りシグナル（上昇トレンド時はスキップ）
         if ($currentPrice < $sellThreshold) {
-            Log::info('LOW BREAKOUT - SHORT SELL SIGNAL', [
-                'symbol' => $symbol,
-                'current_price' => $currentPrice,
-                'sell_threshold' => $sellThreshold,
-                'breakout' => ($lowestLow - $currentPrice) / $lowestLow * 100 . '%',
-            ]);
+            if ($trendFilterEnabled && $trend === 'up') {
+                Log::info('LOW BREAKOUT Skipped - Trend Filter (up trend, no short)', [
+                    'symbol' => $symbol,
+                    'current_price' => $currentPrice,
+                    'sell_threshold' => $sellThreshold,
+                    'trend' => $trend,
+                ]);
+            } else {
+                Log::info('LOW BREAKOUT - SHORT SELL SIGNAL', [
+                    'symbol' => $symbol,
+                    'current_price' => $currentPrice,
+                    'sell_threshold' => $sellThreshold,
+                    'breakout' => ($lowestLow - $currentPrice) / $lowestLow * 100 . '%',
+                    'trend' => $trend,
+                ]);
 
-            return [
-                'action' => 'short',
-                'quantity' => $params['trade_size'] ?? 1,
-                'price' => null, // 成行注文
-            ];
+                return [
+                    'action' => 'short',
+                    'quantity' => $params['trade_size'] ?? 1,
+                    'price' => null, // 成行注文
+                ];
+            }
         }
 
         // どちらでもない場合はホールド
