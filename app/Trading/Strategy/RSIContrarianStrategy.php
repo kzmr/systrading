@@ -130,6 +130,9 @@ class RSIContrarianStrategy extends TradingStrategy
         $rsiOversold = $params['rsi_oversold'] ?? 30;
         $rsiOverbought = $params['rsi_overbought'] ?? 70;
         $cooldownMinutes = $params['cooldown_minutes'] ?? 30;
+        $trendFilterEnabled = $params['trend_filter_enabled'] ?? true;
+        $trendMaPeriod = $params['trend_ma_period'] ?? 60;
+        $trendThreshold = $params['trend_threshold'] ?? 0.3;
 
         $prices = $marketData['prices'];
         $symbol = $marketData['symbol'];
@@ -193,6 +196,9 @@ class RSIContrarianStrategy extends TradingStrategy
         // RSIを保存（決済判定で使用）
         $this->currentRSI = $rsi;
 
+        // トレンド判定
+        $trend = $trendFilterEnabled ? $this->detectTrend($prices, $trendMaPeriod, $trendThreshold) : 'range';
+
         Log::info('RSI Contrarian Analysis', [
             'symbol' => $symbol,
             'current_price' => $currentPrice,
@@ -200,11 +206,34 @@ class RSIContrarianStrategy extends TradingStrategy
             'rsi_period' => $rsiPeriod,
             'oversold_threshold' => $rsiOversold,
             'overbought_threshold' => $rsiOverbought,
+            'trend' => $trend,
+            'trend_filter_enabled' => $trendFilterEnabled,
         ]);
 
         // クールダウンチェック（エントリーシグナル発生時のみ）
         $shouldBuy = $rsi < $rsiOversold;
         $shouldShort = $rsi > $rsiOverbought;
+
+        // トレンドフィルター適用
+        // 下落トレンド中は買いを禁止、上昇トレンド中はショートを禁止
+        if ($trendFilterEnabled) {
+            if ($shouldBuy && $trend === 'down') {
+                Log::info('RSI Contrarian Entry Skipped - Trend Filter (down trend, no long)', [
+                    'symbol' => $symbol,
+                    'rsi' => $rsi,
+                    'trend' => $trend,
+                ]);
+                $shouldBuy = false;
+            }
+            if ($shouldShort && $trend === 'up') {
+                Log::info('RSI Contrarian Entry Skipped - Trend Filter (up trend, no short)', [
+                    'symbol' => $symbol,
+                    'rsi' => $rsi,
+                    'trend' => $trend,
+                ]);
+                $shouldShort = false;
+            }
+        }
 
         if (($shouldBuy || $shouldShort) && $this->isInCooldown($cooldownMinutes)) {
             Log::info('RSI Contrarian Entry Skipped - Cooldown Active', [
@@ -228,6 +257,7 @@ class RSIContrarianStrategy extends TradingStrategy
                 'current_price' => $currentPrice,
                 'rsi' => $rsi,
                 'threshold' => $rsiOversold,
+                'trend' => $trend,
             ]);
 
             return [
@@ -244,6 +274,7 @@ class RSIContrarianStrategy extends TradingStrategy
                 'current_price' => $currentPrice,
                 'rsi' => $rsi,
                 'threshold' => $rsiOverbought,
+                'trend' => $trend,
             ]);
 
             return [
