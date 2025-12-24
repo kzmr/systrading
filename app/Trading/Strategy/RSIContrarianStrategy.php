@@ -297,40 +297,18 @@ class RSIContrarianStrategy extends TradingStrategy
      *
      * @param Position $position ポジション
      * @param float $currentPrice 現在価格
+     * @param array $marketData 市場データ（価格配列を含む）
      * @return array|null 決済する場合は['reason' => string]、しない場合はnull
      */
-    public function shouldClosePosition(Position $position, float $currentPrice): ?array
+    public function shouldClosePosition(Position $position, float $currentPrice, array $marketData = []): ?array
     {
         $params = $this->getParameters();
         $rsiExitThreshold = $params['rsi_exit_threshold'] ?? 50;
         $maxHoldMinutes = $params['max_hold_minutes'] ?? 60;
+        $rsiPeriod = $params['rsi_period'] ?? 14;
 
-        // RSIが計算されていない場合はスキップ
-        if ($this->currentRSI === null) {
-            return null;
-        }
-
-        // 1. RSIベースの利確判定
-        if ($position->side === 'long' && $this->currentRSI > $rsiExitThreshold) {
-            Log::info('RSI Exit - Long position take profit', [
-                'position_id' => $position->id,
-                'rsi' => $this->currentRSI,
-                'threshold' => $rsiExitThreshold,
-            ]);
-            return ['reason' => 'rsi_take_profit', 'rsi' => $this->currentRSI];
-        }
-
-        if ($position->side === 'short' && $this->currentRSI < $rsiExitThreshold) {
-            Log::info('RSI Exit - Short position take profit', [
-                'position_id' => $position->id,
-                'rsi' => $this->currentRSI,
-                'threshold' => $rsiExitThreshold,
-            ]);
-            return ['reason' => 'rsi_take_profit', 'rsi' => $this->currentRSI];
-        }
-
-        // 2. タイムアウト判定
-        $holdMinutes = now()->diffInMinutes($position->opened_at);
+        // 1. タイムアウト判定（RSI計算に依存しない）
+        $holdMinutes = $position->opened_at->diffInMinutes(now());
         if ($holdMinutes >= $maxHoldMinutes) {
             Log::info('RSI Exit - Timeout', [
                 'position_id' => $position->id,
@@ -338,6 +316,38 @@ class RSIContrarianStrategy extends TradingStrategy
                 'max_hold_minutes' => $maxHoldMinutes,
             ]);
             return ['reason' => 'timeout', 'hold_minutes' => $holdMinutes];
+        }
+
+        // 2. RSIベースの利確判定
+        // marketDataから価格を取得してRSIを計算
+        $prices = $marketData['prices'] ?? [];
+        if (empty($prices)) {
+            // 価格データがない場合はRSI判定をスキップ
+            return null;
+        }
+
+        $rsi = $this->calculateRSI($prices, $rsiPeriod);
+        if ($rsi === null) {
+            // RSI計算できない場合はRSI判定をスキップ
+            return null;
+        }
+
+        if ($position->side === 'long' && $rsi > $rsiExitThreshold) {
+            Log::info('RSI Exit - Long position take profit', [
+                'position_id' => $position->id,
+                'rsi' => $rsi,
+                'threshold' => $rsiExitThreshold,
+            ]);
+            return ['reason' => 'rsi_take_profit', 'rsi' => $rsi];
+        }
+
+        if ($position->side === 'short' && $rsi < $rsiExitThreshold) {
+            Log::info('RSI Exit - Short position take profit', [
+                'position_id' => $position->id,
+                'rsi' => $rsi,
+                'threshold' => $rsiExitThreshold,
+            ]);
+            return ['reason' => 'rsi_take_profit', 'rsi' => $rsi];
         }
 
         return null;

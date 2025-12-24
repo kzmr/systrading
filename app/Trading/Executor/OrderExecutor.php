@@ -57,7 +57,7 @@ class OrderExecutor
             ]);
 
             // 2. 戦略ベースの決済チェック（RSI逆張り等）
-            $this->checkStrategyBasedExit($symbol, $currentPrice);
+            $this->checkStrategyBasedExit($symbol, $currentPrice, $marketData);
 
             // 3. トレーリングストップの更新と確認
             $this->updateTrailingStop($symbol, $currentPrice);
@@ -418,7 +418,7 @@ class OrderExecutor
      * 戦略ベースの決済チェック（RSI逆張り等）
      * 戦略がshouldClosePositionメソッドを持つ場合のみ実行
      */
-    private function checkStrategyBasedExit(string $symbol, float $currentPrice): void
+    private function checkStrategyBasedExit(string $symbol, float $currentPrice, array $marketData): void
     {
         // 戦略がshouldClosePositionメソッドを持つか確認
         if (!method_exists($this->strategy, 'shouldClosePosition')) {
@@ -432,7 +432,7 @@ class OrderExecutor
             ->get();
 
         foreach ($positions as $position) {
-            $exitResult = $this->strategy->shouldClosePosition($position, $currentPrice);
+            $exitResult = $this->strategy->shouldClosePosition($position, $currentPrice, $marketData);
 
             if ($exitResult === null) {
                 continue;
