@@ -93,12 +93,29 @@ class LiveTradingClient implements ExchangeClient
 
             Log::info('Buy order executed', $result);
 
+            // 成行注文の場合はfillsから手数料を取得
+            $fee = 0;
+            $executedPrice = $result['price'] ?? $price;
+            if (isset($result['fills']) && !empty($result['fills'])) {
+                $totalValue = 0;
+                $totalQty = 0;
+                foreach ($result['fills'] as $fill) {
+                    $fee += (float) ($fill['commission'] ?? 0);
+                    $totalValue += (float) $fill['price'] * (float) $fill['qty'];
+                    $totalQty += (float) $fill['qty'];
+                }
+                if ($totalQty > 0) {
+                    $executedPrice = $totalValue / $totalQty;
+                }
+            }
+
             return [
                 'success' => true,
                 'order_id' => $result['orderId'],
                 'symbol' => $symbol,
                 'quantity' => $quantity,
-                'price' => $result['price'] ?? $price,
+                'price' => $executedPrice,
+                'fee' => $fee,
                 'timestamp' => now()->toIso8601String(),
             ];
         } catch (\Exception $e) {
@@ -145,12 +162,29 @@ class LiveTradingClient implements ExchangeClient
 
             Log::info('Sell order executed', $result);
 
+            // 成行注文の場合はfillsから手数料を取得
+            $fee = 0;
+            $executedPrice = $result['price'] ?? $price;
+            if (isset($result['fills']) && !empty($result['fills'])) {
+                $totalValue = 0;
+                $totalQty = 0;
+                foreach ($result['fills'] as $fill) {
+                    $fee += (float) ($fill['commission'] ?? 0);
+                    $totalValue += (float) $fill['price'] * (float) $fill['qty'];
+                    $totalQty += (float) $fill['qty'];
+                }
+                if ($totalQty > 0) {
+                    $executedPrice = $totalValue / $totalQty;
+                }
+            }
+
             return [
                 'success' => true,
                 'order_id' => $result['orderId'],
                 'symbol' => $symbol,
                 'quantity' => $quantity,
-                'price' => $result['price'] ?? $price,
+                'price' => $executedPrice,
+                'fee' => $fee,
                 'timestamp' => now()->toIso8601String(),
             ];
         } catch (\Exception $e) {

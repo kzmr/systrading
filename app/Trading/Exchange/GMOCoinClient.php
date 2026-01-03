@@ -133,10 +133,13 @@ class GMOCoinClient implements ExchangeClient
 
             $orderId = $result['data'];
 
-            // 成行注文の場合は約定情報APIから実際の約定価格を取得
+            // 成行注文の場合は約定情報APIから実際の約定価格と手数料を取得
             $executedPrice = $price;
+            $fee = 0;
             if ($price === null) {
-                $executedPrice = $this->getExecutedPrice($orderId, $symbol);
+                $executionDetails = $this->getExecutionDetails($orderId, $symbol);
+                $executedPrice = $executionDetails['price'];
+                $fee = $executionDetails['fee'];
             }
 
             return [
@@ -145,6 +148,7 @@ class GMOCoinClient implements ExchangeClient
                 'symbol' => $symbol,
                 'quantity' => $quantity,
                 'price' => $executedPrice,
+                'fee' => $fee,
                 'timestamp' => now()->toIso8601String(),
             ];
         } catch (\Exception $e) {
@@ -186,10 +190,13 @@ class GMOCoinClient implements ExchangeClient
 
             $orderId = $result['data'];
 
-            // 成行注文の場合は約定情報APIから実際の約定価格を取得
+            // 成行注文の場合は約定情報APIから実際の約定価格と手数料を取得
             $executedPrice = $price;
+            $fee = 0;
             if ($price === null) {
-                $executedPrice = $this->getExecutedPrice($orderId, $symbol);
+                $executionDetails = $this->getExecutionDetails($orderId, $symbol);
+                $executedPrice = $executionDetails['price'];
+                $fee = $executionDetails['fee'];
             }
 
             return [
@@ -198,6 +205,7 @@ class GMOCoinClient implements ExchangeClient
                 'symbol' => $symbol,
                 'quantity' => $quantity,
                 'price' => $executedPrice,
+                'fee' => $fee,
                 'timestamp' => now()->toIso8601String(),
             ];
         } catch (\Exception $e) {
@@ -270,10 +278,12 @@ class GMOCoinClient implements ExchangeClient
     }
 
     /**
-     * 約定価格を取得（orderIdから）
-     * 成行注文の実際の約定価格を取得するために使用
+     * 約定情報を取得（orderIdから）
+     * 成行注文の実際の約定価格と手数料を取得するために使用
+     *
+     * @return array ['price' => float, 'fee' => float]
      */
-    public function getExecutedPrice(string $orderId, string $symbol): float
+    public function getExecutionDetails(string $orderId, string $symbol): array
     {
         // 約定情報を取得（最大3回リトライ、各500ms待機）
         for ($i = 0; $i < 3; $i++) {
@@ -282,33 +292,52 @@ class GMOCoinClient implements ExchangeClient
             $executions = $this->getExecutionsByOrderId($orderId);
 
             if (!empty($executions)) {
-                // 複数約定の場合は加重平均価格を計算
+                // 複数約定の場合は加重平均価格を計算、手数料は合計
                 $totalValue = 0;
                 $totalSize = 0;
+                $totalFee = 0;
                 foreach ($executions as $execution) {
                     $price = (float) $execution['price'];
                     $size = (float) $execution['size'];
+                    $fee = (float) ($execution['fee'] ?? 0);
                     $totalValue += $price * $size;
                     $totalSize += $size;
+                    $totalFee += $fee;
                 }
 
                 if ($totalSize > 0) {
                     $avgPrice = $totalValue / $totalSize;
-                    Log::info('Execution price retrieved', [
+                    Log::info('Execution details retrieved', [
                         'orderId' => $orderId,
                         'avgPrice' => $avgPrice,
+                        'totalFee' => $totalFee,
                         'executionCount' => count($executions),
                     ]);
-                    return $avgPrice;
+                    return [
+                        'price' => $avgPrice,
+                        'fee' => $totalFee,
+                    ];
                 }
             }
         }
 
         // 約定情報が取得できない場合は現在価格を返す（フォールバック）
-        Log::warning('Could not retrieve execution price, using current price', [
+        Log::warning('Could not retrieve execution details, using current price', [
             'orderId' => $orderId,
         ]);
-        return $this->getCurrentPrice($symbol);
+        return [
+            'price' => $this->getCurrentPrice($symbol),
+            'fee' => 0,
+        ];
+    }
+
+    /**
+     * 約定価格を取得（後方互換性のため）
+     */
+    public function getExecutedPrice(string $orderId, string $symbol): float
+    {
+        $details = $this->getExecutionDetails($orderId, $symbol);
+        return $details['price'];
     }
 
     /**
