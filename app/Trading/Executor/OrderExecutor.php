@@ -136,6 +136,7 @@ class OrderExecutor
 
                         $shortPosition->update([
                             'exit_price' => $closeResult['price'],
+                            'exit_fee' => $closeResult['fee'] ?? 0,
                             'status' => 'closed',
                             'closed_at' => now(),
                             'profit_loss' => $profitLoss,
@@ -225,6 +226,7 @@ class OrderExecutor
                     'side' => 'long',
                     'quantity' => $signal['quantity'],
                     'entry_price' => $result['price'],
+                    'entry_fee' => $result['fee'] ?? 0,
                     'trailing_stop_price' => $result['price'] * (1 - $initialTrailingPercent / 100),
                     'status' => 'open',
                     'opened_at' => now(),
@@ -263,6 +265,7 @@ class OrderExecutor
                 if ($position) {
                     $position->update([
                         'exit_price' => $result['price'],
+                        'exit_fee' => $result['fee'] ?? 0,
                         'status' => 'closed',
                         'closed_at' => now(),
                         'profit_loss' => ($result['price'] - $position->entry_price) * $position->quantity,
@@ -294,6 +297,7 @@ class OrderExecutor
 
                         $longPosition->update([
                             'exit_price' => $closeResult['price'],
+                            'exit_fee' => $closeResult['fee'] ?? 0,
                             'status' => 'closed',
                             'closed_at' => now(),
                             'profit_loss' => $profitLoss,
@@ -384,6 +388,7 @@ class OrderExecutor
                     'side' => 'short',
                     'quantity' => $signal['quantity'],
                     'entry_price' => $result['price'],
+                    'entry_fee' => $result['fee'] ?? 0,
                     'trailing_stop_price' => $result['price'] * (1 + $initialTrailingPercent / 100),
                     'status' => 'open',
                     'opened_at' => now(),
@@ -449,6 +454,7 @@ class OrderExecutor
 
                     $position->update([
                         'exit_price' => $sellResult['price'],
+                        'exit_fee' => $sellResult['fee'] ?? 0,
                         'status' => 'closed',
                         'closed_at' => now(),
                         'profit_loss' => $profitLoss,
@@ -502,6 +508,7 @@ class OrderExecutor
 
                     $position->update([
                         'exit_price' => $buyResult['price'],
+                        'exit_fee' => $buyResult['fee'] ?? 0,
                         'status' => 'closed',
                         'closed_at' => now(),
                         'profit_loss' => $profitLoss,
@@ -586,6 +593,7 @@ class OrderExecutor
 
                     $position->update([
                         'exit_price' => $sellResult['price'],
+                        'exit_fee' => $sellResult['fee'] ?? 0,
                         'status' => 'closed',
                         'closed_at' => now(),
                         'profit_loss' => $profitLoss,
@@ -649,6 +657,7 @@ class OrderExecutor
 
                     $position->update([
                         'exit_price' => $buyResult['price'],
+                        'exit_fee' => $buyResult['fee'] ?? 0,
                         'status' => 'closed',
                         'closed_at' => now(),
                         'profit_loss' => $profitLoss,
@@ -903,6 +912,7 @@ class OrderExecutor
 
                     $position->update([
                         'exit_price' => $sellResult['price'],
+                        'exit_fee' => $sellResult['fee'] ?? 0,
                         'status' => 'closed',
                         'closed_at' => now(),
                         'profit_loss' => $profitLoss,
@@ -964,6 +974,7 @@ class OrderExecutor
 
                     $position->update([
                         'exit_price' => $buyResult['price'],
+                        'exit_fee' => $buyResult['fee'] ?? 0,
                         'status' => 'closed',
                         'closed_at' => now(),
                         'profit_loss' => $profitLoss,

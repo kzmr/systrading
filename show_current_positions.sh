@@ -150,9 +150,10 @@ SELECT
     ROUND(p.entry_price, 3) as 'エントリー',
     ROUND(p.exit_price, 3) as 'エグジット',
     ROUND(p.profit_loss, 2) as '損益',
+    ROUND(IFNULL(p.entry_fee, 0) + IFNULL(p.exit_fee, 0), 2) as '手数料',
+    ROUND(p.profit_loss - (IFNULL(p.entry_fee, 0) + IFNULL(p.exit_fee, 0)), 2) as '純損益',
     ROUND((p.profit_loss / (p.entry_price * p.quantity)) * 100, 2) || '%' as '損益率',
-    datetime(p.closed_at, 'localtime') as 'クローズ日時',
-    ROUND((JULIANDAY(p.closed_at) - JULIANDAY(p.opened_at)) * 24, 1) as '保有(h)'
+    datetime(p.closed_at, 'localtime') as 'クローズ日時'
 FROM positions p
 LEFT JOIN trading_settings ts ON p.trading_settings_id = ts.id
 WHERE p.status = 'closed' ${FILTER}
@@ -169,7 +170,9 @@ SELECT
     SUM(CASE WHEN profit_loss > 0 THEN 1 ELSE 0 END) as '勝ち',
     SUM(CASE WHEN profit_loss <= 0 THEN 1 ELSE 0 END) as '負け',
     ROUND(SUM(CASE WHEN profit_loss > 0 THEN 1.0 ELSE 0 END) / COUNT(*) * 100, 1) || '%' as '勝率',
-    ROUND(SUM(IFNULL(profit_loss, 0)), 2) as '累計損益'
+    ROUND(SUM(IFNULL(profit_loss, 0)), 2) as '累計損益',
+    ROUND(SUM(IFNULL(entry_fee, 0) + IFNULL(exit_fee, 0)), 2) as '累計手数料',
+    ROUND(SUM(IFNULL(profit_loss, 0)) - SUM(IFNULL(entry_fee, 0) + IFNULL(exit_fee, 0)), 2) as '純損益'
 FROM positions
 WHERE status = 'closed' ${FILTER}
 GROUP BY symbol;
@@ -181,13 +184,18 @@ sqlite3 -header -column database/database.sqlite <<SQL
 SELECT
     symbol as '通貨ペア',
     COUNT(*) as '取引数',
-    ROUND(SUM(IFNULL(profit_loss, 0)), 2) as '損益'
+    ROUND(SUM(IFNULL(profit_loss, 0)), 2) as '損益',
+    ROUND(SUM(IFNULL(entry_fee, 0) + IFNULL(exit_fee, 0)), 2) as '手数料',
+    ROUND(SUM(IFNULL(profit_loss, 0)) - SUM(IFNULL(entry_fee, 0) + IFNULL(exit_fee, 0)), 2) as '純損益'
 FROM positions
 WHERE status = 'closed'
 AND DATE(closed_at) = DATE('now', 'localtime') ${FILTER}
 GROUP BY symbol
 UNION ALL
-SELECT '合計', COUNT(*), ROUND(SUM(IFNULL(profit_loss, 0)), 2)
+SELECT '合計', COUNT(*),
+    ROUND(SUM(IFNULL(profit_loss, 0)), 2),
+    ROUND(SUM(IFNULL(entry_fee, 0) + IFNULL(exit_fee, 0)), 2),
+    ROUND(SUM(IFNULL(profit_loss, 0)) - SUM(IFNULL(entry_fee, 0) + IFNULL(exit_fee, 0)), 2)
 FROM positions
 WHERE status = 'closed'
 AND DATE(closed_at) = DATE('now', 'localtime') ${FILTER};

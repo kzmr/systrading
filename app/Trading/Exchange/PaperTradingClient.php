@@ -38,17 +38,20 @@ class PaperTradingClient implements ExchangeClient
         $executionPrice = $price ?? $this->getCurrentPrice($symbol);
         $cost = $quantity * $executionPrice;
 
-        if ($this->balance['USDT'] < $cost) {
+        // 手数料をシミュレート（0.05% taker fee）
+        $fee = $cost * 0.0005;
+
+        if ($this->balance['USDT'] < ($cost + $fee)) {
             return [
                 'success' => false,
                 'message' => '残高不足',
                 'balance' => $this->balance['USDT'],
-                'required' => $cost,
+                'required' => $cost + $fee,
             ];
         }
 
-        // 残高を減らす
-        $this->balance['USDT'] -= $cost;
+        // 残高を減らす（手数料含む）
+        $this->balance['USDT'] -= ($cost + $fee);
 
         // ポジションを追加
         $this->positions[] = [
@@ -67,6 +70,7 @@ class PaperTradingClient implements ExchangeClient
             'symbol' => $symbol,
             'quantity' => $quantity,
             'price' => $executionPrice,
+            'fee' => $fee,
             'cost' => $cost,
             'timestamp' => now()->toIso8601String(),
         ];
@@ -76,6 +80,9 @@ class PaperTradingClient implements ExchangeClient
     {
         $executionPrice = $price ?? $this->getCurrentPrice($symbol);
         $revenue = $quantity * $executionPrice;
+
+        // 手数料をシミュレート（0.05% taker fee）
+        $fee = $revenue * 0.0005;
 
         // ロングポジションから売却を試みる
         $sold = false;
@@ -91,8 +98,8 @@ class PaperTradingClient implements ExchangeClient
         }
 
         if ($sold) {
-            // ロングポジションを決済した場合、残高を増やす
-            $this->balance['USDT'] += $revenue;
+            // ロングポジションを決済した場合、残高を増やす（手数料を引く）
+            $this->balance['USDT'] += ($revenue - $fee);
             $this->saveState();
 
             return [
@@ -100,6 +107,7 @@ class PaperTradingClient implements ExchangeClient
                 'symbol' => $symbol,
                 'quantity' => $quantity,
                 'price' => $executionPrice,
+                'fee' => $fee,
                 'revenue' => $revenue,
                 'timestamp' => now()->toIso8601String(),
             ];
@@ -115,6 +123,7 @@ class PaperTradingClient implements ExchangeClient
             'symbol' => $symbol,
             'quantity' => $quantity,
             'price' => $executionPrice,
+            'fee' => $fee,
             'revenue' => $revenue,
             'timestamp' => now()->toIso8601String(),
             'type' => 'short_entry', // ショート新規エントリーであることを示す
