@@ -267,7 +267,16 @@ class GMOCoinClient implements ExchangeClient
                 'orderId' => $orderId,
             ]);
 
-            return $result['data']['list'] ?? [];
+            $list = $result['data']['list'] ?? [];
+
+            if (empty($list)) {
+                Log::debug('No executions found for order', [
+                    'orderId' => $orderId,
+                    'response' => $result,
+                ]);
+            }
+
+            return $list;
         } catch (\Exception $e) {
             Log::error('GMO Coin executions fetch failed', [
                 'orderId' => $orderId,
@@ -285,11 +294,17 @@ class GMOCoinClient implements ExchangeClient
      */
     public function getExecutionDetails(string $orderId, string $symbol): array
     {
-        // 約定情報を取得（最大3回リトライ、各500ms待機）
-        for ($i = 0; $i < 3; $i++) {
-            usleep(500000); // 500ms待機（約定処理完了を待つ）
+        // 約定情報を取得（最大5回リトライ、各1秒待機）
+        for ($i = 0; $i < 5; $i++) {
+            usleep(1000000); // 1秒待機（約定処理完了を待つ）
 
             $executions = $this->getExecutionsByOrderId($orderId);
+
+            Log::debug('Checking executions for order', [
+                'orderId' => $orderId,
+                'attempt' => $i + 1,
+                'executionsCount' => count($executions),
+            ]);
 
             if (!empty($executions)) {
                 // 複数約定の場合は加重平均価格を計算、手数料は合計
@@ -322,7 +337,7 @@ class GMOCoinClient implements ExchangeClient
         }
 
         // 約定情報が取得できない場合は現在価格を返す（フォールバック）
-        Log::warning('Could not retrieve execution details, using current price', [
+        Log::warning('Could not retrieve execution details after 5 attempts, using current price', [
             'orderId' => $orderId,
         ]);
         return [
