@@ -371,8 +371,8 @@ class GMOCoinClient implements ExchangeClient
             $body = json_encode($data);
         }
 
-        // 署名を生成（GETの場合はクエリ付きパス、POSTの場合はパス+ボディ）
-        $text = $timestamp . $method . $path . $queryString . $body;
+        // 署名を生成（GMO Coin APIはパスのみ、クエリパラメータは含めない）
+        $text = $timestamp . $method . $path . $body;
         $sign = hash_hmac('sha256', $text, $this->apiSecret);
 
         $options = [
