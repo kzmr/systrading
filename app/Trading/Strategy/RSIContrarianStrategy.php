@@ -303,9 +303,13 @@ class RSIContrarianStrategy extends TradingStrategy
     public function shouldClosePosition(Position $position, float $currentPrice, array $marketData = []): ?array
     {
         $params = $this->getParameters();
-        $rsiExitThreshold = $params['rsi_exit_threshold'] ?? 50;
         $maxHoldMinutes = $params['max_hold_minutes'] ?? 60;
         $rsiPeriod = $params['rsi_period'] ?? 14;
+
+        // ロング/ショート別の利確閾値（後方互換性のためrsi_exit_thresholdもサポート）
+        $defaultExitThreshold = $params['rsi_exit_threshold'] ?? 50;
+        $rsiExitThresholdLong = $params['rsi_exit_threshold_long'] ?? $defaultExitThreshold;
+        $rsiExitThresholdShort = $params['rsi_exit_threshold_short'] ?? $defaultExitThreshold;
 
         // 1. タイムアウト判定（RSI計算に依存しない）
         $holdMinutes = $position->opened_at->diffInMinutes(now());
@@ -332,20 +336,20 @@ class RSIContrarianStrategy extends TradingStrategy
             return null;
         }
 
-        if ($position->side === 'long' && $rsi > $rsiExitThreshold) {
+        if ($position->side === 'long' && $rsi >= $rsiExitThresholdLong) {
             Log::info('RSI Exit - Long position take profit', [
                 'position_id' => $position->id,
                 'rsi' => $rsi,
-                'threshold' => $rsiExitThreshold,
+                'threshold' => $rsiExitThresholdLong,
             ]);
             return ['reason' => 'rsi_take_profit', 'rsi' => $rsi];
         }
 
-        if ($position->side === 'short' && $rsi < $rsiExitThreshold) {
+        if ($position->side === 'short' && $rsi <= $rsiExitThresholdShort) {
             Log::info('RSI Exit - Short position take profit', [
                 'position_id' => $position->id,
                 'rsi' => $rsi,
-                'threshold' => $rsiExitThreshold,
+                'threshold' => $rsiExitThresholdShort,
             ]);
             return ['reason' => 'rsi_take_profit', 'rsi' => $rsi];
         }
