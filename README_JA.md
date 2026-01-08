@@ -2,12 +2,16 @@
 
 Laravel 12 + PHP 8.3 で構築された仮想通貨の自動トレーディングシステムです。
 
+**現在運用中**: BTC/JPY RSI逆張り戦略（GMOコイン）
+
 ## 特徴
 
+- ✅ **RSI逆張り戦略**（メイン）と**HighLowBreakout戦略**を実装
+- ✅ **手数料トラッキング**: エントリー・決済時の手数料を自動記録
 - ✅ ペーパートレード（仮想取引）とライブトレード（実取引）の両対応
 - ✅ 1分ごとの自動実行
 - ✅ 戦略の柔軟な切り替え（Strategy パターン）
-- ✅ 複数の通貨ペアに対応
+- ✅ 複数の通貨ペア・複数戦略に対応
 - ✅ 完全なログ記録とポジション管理
 
 ## セットアップ
@@ -105,14 +109,15 @@ App\Models\TradingLog::latest()->get();
 ```
 app/Trading/
 ├── Strategy/              # トレーディング戦略
-│   ├── TradingStrategy.php
-│   └── SimpleMovingAverageStrategy.php
+│   ├── TradingStrategy.php          # 基底クラス
+│   ├── RSIContrarianStrategy.php    # RSI逆張り戦略（メイン）
+│   └── HighLowBreakoutStrategy.php  # 高値安値ブレイク戦略
 ├── Exchange/              # 取引所クライアント
 │   ├── ExchangeClient.php
-│   ├── PaperTradingClient.php
-│   ├── GMOCoinClient.php      # GMOコイン対応
-│   └── LiveTradingClient.php  # Binance対応
-└── Executor/              # 注文実行
+│   ├── PaperTradingClient.php  # ペーパートレード（手数料シミュレート）
+│   ├── GMOCoinClient.php       # GMOコイン対応（手数料自動取得）
+│   └── LiveTradingClient.php   # Binance対応
+└── Executor/              # 注文実行・リスク管理
     └── OrderExecutor.php
 ```
 
@@ -161,7 +166,8 @@ class MyCustomStrategy extends TradingStrategy
 - APIキーは `.env` ファイルに保存し、絶対にコミットしない
 - 最初は少額から開始
 - ストップロス・利益確定の設定を確認
-- ログを定期的にモニタリング
+- **手数料を考慮**: 純損益（手数料控除後）で収益性を判断
+- ログを定期的にモニタリング（`./show_current_positions.sh`）
 
 ## 開発
 
