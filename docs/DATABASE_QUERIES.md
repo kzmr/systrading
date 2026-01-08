@@ -156,6 +156,46 @@ GROUP BY symbol;
 EOF
 ```
 
+### 11. 手数料を含む純損益サマリー
+
+```bash
+sqlite3 database/database.sqlite << 'EOF'
+.headers on
+.mode column
+SELECT
+    symbol,
+    COUNT(*) as trades,
+    ROUND(SUM(profit_loss), 2) as gross_profit,
+    ROUND(SUM(IFNULL(entry_fee, 0) + IFNULL(exit_fee, 0)), 2) as total_fees,
+    ROUND(SUM(profit_loss) - SUM(IFNULL(entry_fee, 0) + IFNULL(exit_fee, 0)), 2) as net_profit,
+    ROUND(AVG(profit_loss - (IFNULL(entry_fee, 0) + IFNULL(exit_fee, 0))), 2) as avg_net_profit
+FROM positions
+WHERE status = 'closed'
+GROUP BY symbol;
+EOF
+```
+
+### 12. 本日の手数料を含む取引詳細
+
+```bash
+sqlite3 database/database.sqlite << 'EOF'
+.headers on
+.mode column
+SELECT
+    id,
+    symbol,
+    side,
+    ROUND(profit_loss, 2) as pl,
+    ROUND(IFNULL(entry_fee, 0) + IFNULL(exit_fee, 0), 2) as fee,
+    ROUND(profit_loss - (IFNULL(entry_fee, 0) + IFNULL(exit_fee, 0)), 2) as net_pl,
+    datetime(closed_at, 'localtime') as closed
+FROM positions
+WHERE status = 'closed'
+AND DATE(closed_at) = DATE('now', 'localtime')
+ORDER BY closed_at DESC;
+EOF
+```
+
 ## インタラクティブモード
 
 SQLiteに接続してインタラクティブにクエリを実行：

@@ -11,28 +11,63 @@
 <p align="center">
   <img src="https://img.shields.io/badge/Laravel-12-red" alt="Laravel 12">
   <img src="https://img.shields.io/badge/PHP-8.3-blue" alt="PHP 8.3">
-  <img src="https://img.shields.io/badge/Strategy-HighLowBreakout-green" alt="Strategy">
-  <img src="https://img.shields.io/badge/Mode-PaperTrading-yellow" alt="Mode">
+  <img src="https://img.shields.io/badge/Strategy-RSI_Contrarian-green" alt="Strategy">
+  <img src="https://img.shields.io/badge/Exchange-GMO_Coin-orange" alt="Exchange">
+  <img src="https://img.shields.io/badge/Fee_Tracking-Enabled-purple" alt="Fee Tracking">
 </p>
 
 ---
 
 ## 📊 概要
 
-**XRP/JPY HighLowBreakout戦略**を実装した自動トレーディングシステム。GMOコインの実データを使用したペーパートレード（仮想取引）に対応し、1分ごとに戦略を実行して自動売買を行います。
+**RSI逆張り戦略**と**HighLowBreakout戦略**を実装した自動トレーディングシステム。GMOコインの実データを使用したライブトレード（実取引）とペーパートレード（仮想取引）に対応し、1分ごとに戦略を実行して自動売買を行います。
+
+**現在運用中**: BTC/JPY RSI逆張り戦略（手数料対策済み）
 
 ### 主な特徴
 
-- ✅ **高度なリスク管理**: 3層防御（固定損切り・トレーリングストップ・逆方向ブレイク決済）
-- ✅ **バックテスト最適化済み**: トレーリングストップを0.5%に最適化（総損益101%向上）
-- ✅ **マルチポジション対応**: 同一方向に最大3ポジションまで保有可能
+- ✅ **2種類の戦略**: RSI逆張り（メイン）、HighLowBreakout
+- ✅ **手数料トラッキング**: エントリー・決済時の手数料を自動記録、純損益を算出
+- ✅ **高度なリスク管理**: 固定損切り・トレーリングストップ・タイムアウト決済
+- ✅ **手数料対策済みパラメータ**: RSI閾値厳格化（25/75）、非対称利確閾値（55/45）
 - ✅ **完全自動運用**: 1分ごとの自動実行・自動決済
 - ✅ **価格履歴記録**: 全取引データと価格履歴をデータベースに保存
-- ✅ **安全なテスト環境**: ペーパートレードで実資金リスクなし
+- ✅ **マルチ戦略対応**: 同一通貨ペアで複数戦略を運用可能
 
 ---
 
 ## 🎯 トレーディング戦略
+
+### RSI逆張り戦略（メイン・現在運用中）
+
+RSI（相対力指数）を使った**逆張り戦略**。売られすぎ・買われすぎの水準で反転を狙う。
+
+#### エントリー条件
+
+| 条件 | ロング | ショート |
+|------|--------|----------|
+| RSI | < 25（売られすぎ） | > 75（買われすぎ） |
+| スプレッド | 0.1%以内 | 0.1%以内 |
+
+#### エグジット条件
+
+1. **RSI利確**: ロング時 RSI ≥ 55、ショート時 RSI ≤ 45
+2. **タイムアウト**: 60分経過で強制決済
+3. **損切り**: 1%逆行で強制決済
+
+#### BTC/JPYパラメータ（手数料対策済み）
+
+| パラメータ | 設定値 | 説明 |
+|----------|--------|------|
+| rsi_period | 60 | RSI計算期間 |
+| rsi_oversold | 25 | 買いエントリー閾値 |
+| rsi_overbought | 75 | 売りエントリー閾値 |
+| rsi_exit_threshold_long | 55 | ロング利確閾値 |
+| rsi_exit_threshold_short | 45 | ショート利確閾値 |
+| trade_size | 0.01 | 取引量（BTC） |
+| max_hold_minutes | 60 | 最大保有時間 |
+
+---
 
 ### HighLowBreakout戦略
 
@@ -97,6 +132,9 @@
 ### データベース
 
 - **positions**: ポジション情報（現在・過去）
+  - `entry_fee`, `exit_fee`: 取引手数料（自動記録）
+  - `profit_loss`, `net_profit_loss`: 損益、純損益（手数料控除後）
+- **trading_settings**: 戦略設定（パラメータはJSON形式で管理）
 - **trading_logs**: 全取引実行ログ
 - **price_history**: 価格履歴（1分足）
 

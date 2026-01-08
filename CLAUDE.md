@@ -49,8 +49,22 @@ Laravelベースの自動トレーディングシステムで、ペーパート�
   - `side`: 'long' または 'short'
   - `status`: 'open' または 'closed'
   - `entry_price`, `exit_price`, `profit_loss`, `trailing_stop_price`
+  - `entry_fee`, `exit_fee`: 取引手数料（GMO Coin APIから自動取得）
 - **trading_logs**: 全ての取引実行ログ
 - **price_history**: 価格履歴（バックテスト用）
+
+### 手数料トラッキング
+
+ポジションごとに取引手数料を自動記録：
+
+- **entry_fee**: エントリー時の手数料
+- **exit_fee**: 決済時の手数料
+- **total_fee**: 合計手数料（`entry_fee + exit_fee`）
+- **net_profit_loss**: 純損益（`profit_loss - total_fee`）
+
+`show_current_positions.sh` で手数料控除後の純損益を確認可能。
+
+**注意**: BTCなど取引額が大きい場合、往復手数料が約150円程度かかるため、小さな利益では手数料負けする可能性あり。
 
 ## パラメータ管理
 
@@ -90,30 +104,35 @@ RSI（相対力指数）を使った逆張り戦略。売られすぎ・買わ�
 
 **パラメータ（DBで管理）:**
 
-| パラメータ | 説明 | 現在値 |
-|-----------|------|--------|
-| rsi_period | RSI計算期間 | 60 |
-| rsi_oversold | 売られすぎ閾値 | 30 |
-| rsi_overbought | 買われすぎ閾値 | 70 |
-| rsi_exit_threshold | 決済RSI閾値 | 50 |
-| trade_size | 1回の取引サイズ | 1（XRP）, 0.001（BTC）, 0.01（ETH） |
-| max_positions | 最大ポジション数 | 1 |
-| max_hold_minutes | 最大保有時間（分） | 60 |
-| stop_loss_percent | 固定損切り（%） | 1.0 |
+| パラメータ | 説明 | BTC設定 | 備考 |
+|-----------|------|---------|------|
+| rsi_period | RSI計算期間 | 60 | |
+| rsi_oversold | 売られすぎ閾値（買いエントリー） | 25 | 厳格化で取引精度向上 |
+| rsi_overbought | 買われすぎ閾値（売りエントリー） | 75 | 厳格化で取引精度向上 |
+| rsi_exit_threshold_long | ロング利確RSI閾値 | 55 | 大きな利幅を狙う |
+| rsi_exit_threshold_short | ショート利確RSI閾値 | 45 | 大きな利幅を狙う |
+| trade_size | 1回の取引サイズ | 0.01 | BTC |
+| max_positions | 最大ポジション数 | 1 | |
+| max_hold_minutes | 最大保有時間（分） | 60 | |
+| stop_loss_percent | 固定損切り（%） | 1.0 | |
 
 **シグナル発生条件:**
-- **買いシグナル**: RSI < 30（売られすぎ）
-- **ショートシグナル**: RSI > 70（買われすぎ）
+- **買いシグナル**: RSI < rsi_oversold（例: RSI < 25）
+- **ショートシグナル**: RSI > rsi_overbought（例: RSI > 75）
 
 **決済条件（shouldClosePositionメソッド）:**
-1. **RSI利確**: ロング時にRSI≥50、ショート時にRSI≤50
-2. **タイムアウト**: 60分経過で強制決済
-3. **損切り**: 1%逆行で損切り（共通機能）
+1. **RSI利確（ロング）**: RSI ≥ rsi_exit_threshold_long（例: RSI ≥ 55）
+2. **RSI利確（ショート）**: RSI ≤ rsi_exit_threshold_short（例: RSI ≤ 45）
+3. **タイムアウト**: max_hold_minutes経過で強制決済
+4. **損切り**: stop_loss_percent逆行で損切り（共通機能）
+
+**手数料対策:**
+BTCは往復手数料が約150円かかるため、以下の調整を実施：
+- エントリー条件を厳格化（RSI 25/75）→ 取引回数削減、反発幅拡大
+- 利確閾値を調整（55/45）→ より大きな利益を狙う
 
 **運用中の戦略:**
-- XRP RSI逆張り戦略（ID:6）
-- BTC RSI逆張り戦略（ID:7）
-- ETH RSI逆張り戦略（ID:8）
+- BTC RSI逆張り戦略（ID:5）※現在唯一運用中
 
 ---
 
@@ -222,20 +241,21 @@ php artisan config:clear
 ```php
 use App\Models\TradingSettings;
 
-// RSIContrarianStrategy の例（現在運用中）
+// RSIContrarianStrategy の例（BTC用・手数料対策済み）
 TradingSettings::create([
-    'name' => 'XRP RSI逆張り戦略',
-    'symbol' => 'XRP/JPY',
+    'name' => 'BTC RSI逆張り戦略',
+    'symbol' => 'BTC/JPY',
     'strategy' => 'App\\Trading\\Strategy\\RSIContrarianStrategy',
     'parameters' => [
         // RSI固有パラメータ
         'rsi_period' => 60,
-        'rsi_oversold' => 30,
-        'rsi_overbought' => 70,
-        'rsi_exit_threshold' => 50,
+        'rsi_oversold' => 25,              // 厳格化（デフォルト30）
+        'rsi_overbought' => 75,            // 厳格化（デフォルト70）
+        'rsi_exit_threshold_long' => 55,   // ロング利確閾値
+        'rsi_exit_threshold_short' => 45,  // ショート利確閾値
         'max_hold_minutes' => 60,
         // リスク管理パラメータ
-        'trade_size' => 1,
+        'trade_size' => 0.01,
         'max_positions' => 1,
         'stop_loss_percent' => 1.0,
         'initial_trailing_stop_percent' => 0.7,
@@ -366,7 +386,8 @@ EXCHANGE_API_SECRET=your_binance_api_secret
   - 日本の仮想通貨取引所
   - APIドキュメント: https://api.coin.z.com/docs/
   - 対応通貨ペア: BTC/JPY, ETH/JPY, XRP/JPY, LTC/JPY, BCH/JPY等
-  - 現在運用中: XRP/JPY, BTC/JPY, ETH/JPY（RSI逆張り戦略）
+  - 現在運用中: BTC/JPY（RSI逆張り戦略・手数料対策済み）
+  - 手数料: 約0.05%（taker手数料）※自動トラッキング対応
 
 - **Binance** (`EXCHANGE_NAME=binance`)
   - 世界最大の仮想通貨取引所
