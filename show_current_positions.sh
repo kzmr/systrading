@@ -122,6 +122,7 @@ SELECT
     p.quantity as '数量',
     p.entry_price as 'エントリー',
     ROUND(p.trailing_stop_price, 3) as 'トレーリングS',
+    ROUND(p.exit_order_price, 3) as '決済指値',
     datetime(p.opened_at, 'localtime') as 'オープン日時'
 FROM positions p
 WHERE p.status = 'open' ${FILTER}
