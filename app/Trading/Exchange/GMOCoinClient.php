@@ -258,6 +258,88 @@ class GMOCoinClient implements ExchangeClient
     }
 
     /**
+     * 注文をキャンセル
+     *
+     * @see https://api.coin.z.com/docs/#cancel
+     */
+    public function cancelOrder(string $orderId): array
+    {
+        try {
+            $result = $this->sendPrivateRequest('POST', '/v1/cancelOrder', [
+                'orderId' => $orderId,
+            ]);
+
+            Log::info('GMO Coin order canceled', [
+                'orderId' => $orderId,
+                'result' => $result,
+            ]);
+
+            return [
+                'success' => true,
+                'order_id' => $orderId,
+            ];
+        } catch (\Exception $e) {
+            Log::warning('GMO Coin cancel order failed', [
+                'orderId' => $orderId,
+                'error' => $e->getMessage(),
+            ]);
+
+            return [
+                'success' => false,
+                'order_id' => $orderId,
+                'message' => $e->getMessage(),
+            ];
+        }
+    }
+
+    /**
+     * 注文状態を取得
+     *
+     * @see https://api.coin.z.com/docs/#orders
+     * @return array ['status' => 'EXECUTED'|'WAITING'|'CANCELED'|'EXPIRED'|'NOT_FOUND', ...]
+     */
+    public function getOrderStatus(string $orderId): array
+    {
+        try {
+            $result = $this->sendPrivateRequest('GET', '/v1/orders', [
+                'orderId' => $orderId,
+            ]);
+
+            $orders = $result['data']['list'] ?? [];
+
+            if (empty($orders)) {
+                return [
+                    'status' => 'NOT_FOUND',
+                    'order_id' => $orderId,
+                ];
+            }
+
+            $order = $orders[0];
+
+            return [
+                'status' => $order['status'], // WAITING, EXECUTED, CANCELED, EXPIRED
+                'order_id' => $orderId,
+                'side' => $order['side'] ?? null,
+                'executionType' => $order['executionType'] ?? null,
+                'price' => isset($order['price']) ? (float) $order['price'] : null,
+                'size' => isset($order['size']) ? (float) $order['size'] : null,
+                'executedSize' => isset($order['executedSize']) ? (float) $order['executedSize'] : null,
+            ];
+        } catch (\Exception $e) {
+            Log::error('GMO Coin get order status failed', [
+                'orderId' => $orderId,
+                'error' => $e->getMessage(),
+            ]);
+
+            return [
+                'status' => 'ERROR',
+                'order_id' => $orderId,
+                'message' => $e->getMessage(),
+            ];
+        }
+    }
+
+    /**
      * 注文IDから約定情報を取得
      */
     public function getExecutionsByOrderId(string $orderId): array

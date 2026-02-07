@@ -34,10 +34,11 @@ class OrderExecutorFeeTest extends TestCase
         ]);
 
         $mock->shouldReceive('getSpread')->andReturn(0.01);
+        $mock->shouldReceive('getCurrentPrice')->andReturn($price);
 
         $mock->shouldReceive('buy')->andReturn([
             'success' => true,
-            'order_id' => 'test-order-id',
+            'order_id' => 'test-order-id-' . uniqid(),
             'symbol' => 'XRP/JPY',
             'quantity' => 1,
             'price' => $price,
@@ -47,13 +48,26 @@ class OrderExecutorFeeTest extends TestCase
 
         $mock->shouldReceive('sell')->andReturn([
             'success' => true,
-            'order_id' => 'test-order-id',
+            'order_id' => 'test-order-id-' . uniqid(),
             'symbol' => 'XRP/JPY',
             'quantity' => 1,
             'price' => $price,
             'fee' => $fee,
             'timestamp' => now()->toIso8601String(),
         ]);
+
+        // 新しいメソッドのモック
+        $mock->shouldReceive('cancelOrder')->andReturn([
+            'success' => true,
+            'order_id' => 'test-order-id',
+        ]);
+
+        $mock->shouldReceive('getOrderStatus')->andReturn([
+            'status' => 'WAITING',
+            'order_id' => 'test-order-id',
+        ]);
+
+        $mock->shouldReceive('getExecutionsByOrderId')->andReturn([]);
 
         return $mock;
     }
@@ -253,15 +267,27 @@ class OrderExecutorFeeTest extends TestCase
             'bid' => 320.0,
         ]);
         $mock->shouldReceive('getSpread')->andReturn(0.01);
+        $mock->shouldReceive('getCurrentPrice')->andReturn(320.0);
         $mock->shouldReceive('buy')->andReturn([
             'success' => true,
-            'order_id' => 'test-order-id',
+            'order_id' => 'test-order-id-' . uniqid(),
             'symbol' => 'XRP/JPY',
             'quantity' => 1,
             'price' => 320.0,
             // No 'fee' key
             'timestamp' => now()->toIso8601String(),
         ]);
+        $mock->shouldReceive('sell')->andReturn([
+            'success' => true,
+            'order_id' => 'test-order-id-' . uniqid(),
+            'symbol' => 'XRP/JPY',
+            'quantity' => 1,
+            'price' => 320.0,
+            'timestamp' => now()->toIso8601String(),
+        ]);
+        $mock->shouldReceive('cancelOrder')->andReturn(['success' => true]);
+        $mock->shouldReceive('getOrderStatus')->andReturn(['status' => 'WAITING']);
+        $mock->shouldReceive('getExecutionsByOrderId')->andReturn([]);
 
         $strategy = $this->createMockStrategy($settings->id, 'buy');
         $executor = new OrderExecutor($mock, $strategy);

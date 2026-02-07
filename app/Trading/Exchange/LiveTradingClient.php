@@ -277,4 +277,151 @@ class LiveTradingClient implements ExchangeClient
             return 999999.0;
         }
     }
+
+    /**
+     * 現在価格を取得
+     */
+    public function getCurrentPrice(string $symbol): float
+    {
+        try {
+            $response = $this->httpClient->get('/api/v3/ticker/price', [
+                'query' => [
+                    'symbol' => str_replace('/', '', $symbol),
+                ],
+            ]);
+
+            $data = json_decode($response->getBody()->getContents(), true);
+            return (float) $data['price'];
+        } catch (\Exception $e) {
+            Log::error('Binance current price fetch failed', ['error' => $e->getMessage()]);
+            throw $e;
+        }
+    }
+
+    /**
+     * 注文をキャンセル
+     */
+    public function cancelOrder(string $orderId): array
+    {
+        try {
+            $params = $this->signRequest([
+                'orderId' => $orderId,
+                'timestamp' => now()->timestamp * 1000,
+            ]);
+
+            $response = $this->httpClient->delete('/api/v3/order', [
+                'query' => $params,
+                'headers' => [
+                    'X-MBX-APIKEY' => $this->apiKey,
+                ],
+            ]);
+
+            $result = json_decode($response->getBody()->getContents(), true);
+
+            Log::info('Binance order canceled', $result);
+
+            return [
+                'success' => true,
+                'order_id' => $orderId,
+            ];
+        } catch (\Exception $e) {
+            Log::warning('Binance cancel order failed', [
+                'orderId' => $orderId,
+                'error' => $e->getMessage(),
+            ]);
+
+            return [
+                'success' => false,
+                'order_id' => $orderId,
+                'message' => $e->getMessage(),
+            ];
+        }
+    }
+
+    /**
+     * 注文状態を取得
+     */
+    public function getOrderStatus(string $orderId): array
+    {
+        try {
+            $params = $this->signRequest([
+                'orderId' => $orderId,
+                'timestamp' => now()->timestamp * 1000,
+            ]);
+
+            $response = $this->httpClient->get('/api/v3/order', [
+                'query' => $params,
+                'headers' => [
+                    'X-MBX-APIKEY' => $this->apiKey,
+                ],
+            ]);
+
+            $order = json_decode($response->getBody()->getContents(), true);
+
+            // Binanceのステータスを共通形式に変換
+            $statusMap = [
+                'NEW' => 'WAITING',
+                'FILLED' => 'EXECUTED',
+                'CANCELED' => 'CANCELED',
+                'EXPIRED' => 'EXPIRED',
+                'PARTIALLY_FILLED' => 'WAITING',
+            ];
+
+            return [
+                'status' => $statusMap[$order['status']] ?? $order['status'],
+                'order_id' => $orderId,
+                'side' => $order['side'],
+                'price' => isset($order['price']) ? (float) $order['price'] : null,
+                'size' => isset($order['origQty']) ? (float) $order['origQty'] : null,
+                'executedSize' => isset($order['executedQty']) ? (float) $order['executedQty'] : null,
+            ];
+        } catch (\Exception $e) {
+            Log::error('Binance get order status failed', [
+                'orderId' => $orderId,
+                'error' => $e->getMessage(),
+            ]);
+
+            return [
+                'status' => 'ERROR',
+                'order_id' => $orderId,
+                'message' => $e->getMessage(),
+            ];
+        }
+    }
+
+    /**
+     * 注文IDから約定情報を取得
+     */
+    public function getExecutionsByOrderId(string $orderId): array
+    {
+        try {
+            $params = $this->signRequest([
+                'orderId' => $orderId,
+                'timestamp' => now()->timestamp * 1000,
+            ]);
+
+            $response = $this->httpClient->get('/api/v3/myTrades', [
+                'query' => $params,
+                'headers' => [
+                    'X-MBX-APIKEY' => $this->apiKey,
+                ],
+            ]);
+
+            $trades = json_decode($response->getBody()->getContents(), true);
+
+            return array_map(function ($trade) {
+                return [
+                    'price' => (float) $trade['price'],
+                    'size' => (float) $trade['qty'],
+                    'fee' => (float) $trade['commission'],
+                ];
+            }, $trades);
+        } catch (\Exception $e) {
+            Log::error('Binance get executions failed', [
+                'orderId' => $orderId,
+                'error' => $e->getMessage(),
+            ]);
+            return [];
+        }
+    }
 }
