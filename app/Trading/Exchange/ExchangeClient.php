@@ -57,4 +57,36 @@ interface ExchangeClient
      * @return float スプレッド（円）
      */
     public function getSpread(string $symbol): float;
+
+    /**
+     * 注文をキャンセル
+     *
+     * @param string $orderId 注文ID
+     * @return array キャンセル結果
+     */
+    public function cancelOrder(string $orderId): array;
+
+    /**
+     * 注文状態を取得
+     *
+     * @param string $orderId 注文ID
+     * @return array 注文状態 ['status' => 'EXECUTED'|'WAITING'|'CANCELED'|'EXPIRED', ...]
+     */
+    public function getOrderStatus(string $orderId): array;
+
+    /**
+     * 現在価格を取得
+     *
+     * @param string $symbol 通貨ペア
+     * @return float 現在価格
+     */
+    public function getCurrentPrice(string $symbol): float;
+
+    /**
+     * 注文IDから約定情報を取得
+     *
+     * @param string $orderId 注文ID
+     * @return array 約定情報のリスト
+     */
+    public function getExecutionsByOrderId(string $orderId): array;
 }

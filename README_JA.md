@@ -8,6 +8,7 @@ Laravel 12 + PHP 8.3 で構築された仮想通貨の自動トレーディン�
 
 - ✅ **RSI逆張り戦略**（メイン）と**HighLowBreakout戦略**を実装
 - ✅ **手数料トラッキング**: エントリー・決済時の手数料を自動記録
+- ✅ **手数料最適化**: 決済を指値注文で実行しMaker手数料リベート（-0.01%）を適用
 - ✅ ペーパートレード（仮想取引）とライブトレード（実取引）の両対応
 - ✅ 1分ごとの自動実行
 - ✅ 戦略の柔軟な切り替え（Strategy パターン）
@@ -115,9 +116,9 @@ app/Trading/
 ├── Exchange/              # 取引所クライアント
 │   ├── ExchangeClient.php
 │   ├── PaperTradingClient.php  # ペーパートレード（手数料シミュレート）
-│   ├── GMOCoinClient.php       # GMOコイン対応（手数料自動取得）
+│   ├── GMOCoinClient.php       # GMOコイン対応（手数料自動取得、指値注文管理）
 │   └── LiveTradingClient.php   # Binance対応
-└── Executor/              # 注文実行・リスク管理
+└── Executor/              # 注文実行・リスク管理・指値決済注文管理
     └── OrderExecutor.php
 ```
 

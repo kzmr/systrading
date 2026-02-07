@@ -56,15 +56,17 @@ class OrderExecutor
                 'recorded_at' => now(),
             ]);
 
-            // 2. 戦略ベースの決済チェック（RSI逆張り等）
+            // 2. 決済指値注文の約定チェック（最優先）
+            $this->checkExitOrderExecution($symbol);
+
+            // 3. 戦略ベースの決済チェック（RSI逆張り等）
             $this->checkStrategyBasedExit($symbol, $currentPrice, $marketData);
 
-            // 3. トレーリングストップの更新と確認
+            // 4. トレーリングストップの更新と指値注文の管理
             $this->updateTrailingStop($symbol, $currentPrice);
-            $this->checkTrailingStop($symbol, $currentPrice);
 
-            // 4. 固定損切りチェック（1%逆行で自動決済、最終防衛ライン）
-            $this->checkStopLoss($symbol, $currentPrice);
+            // 5. フォールバック: 指値注文がない場合の成行決済チェック
+            $this->checkTrailingStopFallback($symbol, $currentPrice);
 
             // 5. ストラテジーで分析
             $signal = $this->strategy->analyze($marketData);
@@ -127,6 +129,11 @@ class OrderExecutor
                 // 全ショートポジションを一斉決済
                 $totalProfitLoss = 0;
                 foreach ($shortPositions as $shortPosition) {
+                    // 既存の決済指値注文をキャンセル
+                    if ($shortPosition->exit_order_id) {
+                        $this->exchangeClient->cancelOrder($shortPosition->exit_order_id);
+                    }
+
                     $closeResult = $this->exchangeClient->buy($symbol, $shortPosition->quantity, null); // 成行注文
 
                     if ($closeResult['success']) {
@@ -140,6 +147,8 @@ class OrderExecutor
                             'status' => 'closed',
                             'closed_at' => now(),
                             'profit_loss' => $profitLoss,
+                            'exit_order_id' => null,
+                            'exit_order_price' => null,
                         ]);
 
                         // エグジット通知を送信
@@ -220,17 +229,23 @@ class OrderExecutor
             if ($result['success']) {
                 // ポジションを記録（初期トレーリングストップ: DBから取得）
                 $initialTrailingPercent = (float) $this->getParam('initial_trailing_stop_percent', 0.7);
-                Position::create([
+                $trailingStopPrice = $result['price'] * (1 - $initialTrailingPercent / 100);
+
+                $newPosition = Position::create([
                     'symbol' => $symbol,
                     'trading_settings_id' => $this->strategy->getSettingsId(),
                     'side' => 'long',
                     'quantity' => $signal['quantity'],
                     'entry_price' => $result['price'],
                     'entry_fee' => $result['fee'] ?? 0,
-                    'trailing_stop_price' => $result['price'] * (1 - $initialTrailingPercent / 100),
+                    'trailing_stop_price' => $trailingStopPrice,
                     'status' => 'open',
                     'opened_at' => now(),
                 ]);
+
+                // 決済指値注文を即座に発注
+                $exitPrice = $this->calculateExitPrice($newPosition, $trailingStopPrice);
+                $this->placeOrUpdateExitOrder($newPosition, $symbol, $exitPrice);
 
                 // エントリー通知を送信
                 $this->sendNotification(
@@ -288,6 +303,11 @@ class OrderExecutor
                 // 全ロングポジションを一斉決済
                 $totalProfitLoss = 0;
                 foreach ($longPositions as $longPosition) {
+                    // 既存の決済指値注文をキャンセル
+                    if ($longPosition->exit_order_id) {
+                        $this->exchangeClient->cancelOrder($longPosition->exit_order_id);
+                    }
+
                     $closeResult = $this->exchangeClient->sell($symbol, $longPosition->quantity, null); // 成行注文
 
                     if ($closeResult['success']) {
@@ -301,6 +321,8 @@ class OrderExecutor
                             'status' => 'closed',
                             'closed_at' => now(),
                             'profit_loss' => $profitLoss,
+                            'exit_order_id' => null,
+                            'exit_order_price' => null,
                         ]);
 
                         // エグジット通知を送信
@@ -382,17 +404,23 @@ class OrderExecutor
             if ($result['success']) {
                 // ショートポジションを記録（初期トレーリングストップ: DBから取得）
                 $initialTrailingPercent = (float) $this->getParam('initial_trailing_stop_percent', 0.7);
-                Position::create([
+                $trailingStopPrice = $result['price'] * (1 + $initialTrailingPercent / 100);
+
+                $newPosition = Position::create([
                     'symbol' => $symbol,
                     'trading_settings_id' => $this->strategy->getSettingsId(),
                     'side' => 'short',
                     'quantity' => $signal['quantity'],
                     'entry_price' => $result['price'],
                     'entry_fee' => $result['fee'] ?? 0,
-                    'trailing_stop_price' => $result['price'] * (1 + $initialTrailingPercent / 100),
+                    'trailing_stop_price' => $trailingStopPrice,
                     'status' => 'open',
                     'opened_at' => now(),
                 ]);
+
+                // 決済指値注文を即座に発注
+                $exitPrice = $this->calculateExitPrice($newPosition, $trailingStopPrice);
+                $this->placeOrUpdateExitOrder($newPosition, $symbol, $exitPrice);
 
                 // エントリー通知を送信
                 $this->sendNotification(
@@ -447,6 +475,11 @@ class OrderExecutor
 
             // ロングポジションの決済
             if ($position->side === 'long') {
+                // 既存の決済指値注文をキャンセル
+                if ($position->exit_order_id) {
+                    $this->exchangeClient->cancelOrder($position->exit_order_id);
+                }
+
                 $sellResult = $this->exchangeClient->sell($symbol, $position->quantity, null);
 
                 if ($sellResult['success']) {
@@ -458,6 +491,8 @@ class OrderExecutor
                         'status' => 'closed',
                         'closed_at' => now(),
                         'profit_loss' => $profitLoss,
+                        'exit_order_id' => null,
+                        'exit_order_price' => null,
                     ]);
 
                     $reasonMessage = $this->getExitReasonMessage($reason, $exitResult);
@@ -501,6 +536,11 @@ class OrderExecutor
 
             // ショートポジションの決済
             if ($position->side === 'short') {
+                // 既存の決済指値注文をキャンセル
+                if ($position->exit_order_id) {
+                    $this->exchangeClient->cancelOrder($position->exit_order_id);
+                }
+
                 $buyResult = $this->exchangeClient->buy($symbol, $position->quantity, null);
 
                 if ($buyResult['success']) {
@@ -512,6 +552,8 @@ class OrderExecutor
                         'status' => 'closed',
                         'closed_at' => now(),
                         'profit_loss' => $profitLoss,
+                        'exit_order_id' => null,
+                        'exit_order_price' => null,
                     ]);
 
                     $reasonMessage = $this->getExitReasonMessage($reason, $exitResult);
@@ -795,6 +837,297 @@ class OrderExecutor
     }
 
     /**
+     * ポジションの決済価格を計算（トレーリングストップと損切りの保護的な方）
+     */
+    private function calculateExitPrice(Position $position, float $trailingStopPrice): float
+    {
+        $stopLossPercent = (float) $this->getParam('stop_loss_percent', 1.0);
+
+        if ($position->side === 'long') {
+            // ロング: 損切り価格 = エントリー価格 × (1 - 損切り%)
+            $stopLossPrice = $position->entry_price * (1 - $stopLossPercent / 100);
+            // より高い方（保護的な方）を選択
+            return max($trailingStopPrice, $stopLossPrice);
+        } else {
+            // ショート: 損切り価格 = エントリー価格 × (1 + 損切り%)
+            $stopLossPrice = $position->entry_price * (1 + $stopLossPercent / 100);
+            // より低い方（保護的な方）を選択
+            return min($trailingStopPrice, $stopLossPrice);
+        }
+    }
+
+    /**
+     * 決済指値注文を発注または更新
+     */
+    private function placeOrUpdateExitOrder(Position $position, string $symbol, float $exitPrice): void
+    {
+        // 既存の注文があり、価格が同じなら何もしない
+        if ($position->exit_order_id && abs($position->exit_order_price - $exitPrice) < 0.01) {
+            return;
+        }
+
+        // 既存の注文があればキャンセル
+        if ($position->exit_order_id) {
+            $cancelResult = $this->exchangeClient->cancelOrder($position->exit_order_id);
+
+            if ($cancelResult['success']) {
+                Log::info('Exit order canceled for update', [
+                    'symbol' => $symbol,
+                    'position_id' => $position->id,
+                    'old_order_id' => $position->exit_order_id,
+                    'old_price' => $position->exit_order_price,
+                ]);
+            } else {
+                // キャンセル失敗の場合、注文状態を確認
+                $orderStatus = $this->exchangeClient->getOrderStatus($position->exit_order_id);
+
+                if ($orderStatus['status'] === 'EXECUTED') {
+                    // 既に約定している場合はポジションをクローズ
+                    $this->handleExecutedExitOrder($position, $symbol, $orderStatus);
+                    return;
+                }
+
+                Log::warning('Failed to cancel exit order', [
+                    'symbol' => $symbol,
+                    'position_id' => $position->id,
+                    'order_id' => $position->exit_order_id,
+                    'status' => $orderStatus['status'],
+                ]);
+            }
+        }
+
+        // 新しい指値注文を発注
+        if ($position->side === 'long') {
+            $orderResult = $this->exchangeClient->sell($symbol, $position->quantity, $exitPrice);
+        } else {
+            $orderResult = $this->exchangeClient->buy($symbol, $position->quantity, $exitPrice);
+        }
+
+        if ($orderResult['success']) {
+            $position->update([
+                'exit_order_id' => $orderResult['order_id'],
+                'exit_order_price' => $exitPrice,
+            ]);
+
+            Log::info('Exit limit order placed', [
+                'symbol' => $symbol,
+                'position_id' => $position->id,
+                'side' => $position->side,
+                'order_id' => $orderResult['order_id'],
+                'exit_price' => $exitPrice,
+            ]);
+        } else {
+            Log::error('Failed to place exit limit order', [
+                'symbol' => $symbol,
+                'position_id' => $position->id,
+                'exit_price' => $exitPrice,
+                'error' => $orderResult['message'] ?? 'Unknown error',
+            ]);
+        }
+    }
+
+    /**
+     * 約定済み決済注文の処理
+     */
+    private function handleExecutedExitOrder(Position $position, string $symbol, array $orderStatus): void
+    {
+        // 約定情報を取得
+        $executions = $this->exchangeClient->getExecutionsByOrderId($position->exit_order_id);
+
+        $exitPrice = $position->exit_order_price;
+        $fee = 0;
+
+        if (!empty($executions)) {
+            $totalValue = 0;
+            $totalSize = 0;
+            foreach ($executions as $execution) {
+                $price = (float) $execution['price'];
+                $size = (float) $execution['size'];
+                $fee += (float) ($execution['fee'] ?? 0);
+                $totalValue += $price * $size;
+                $totalSize += $size;
+            }
+            if ($totalSize > 0) {
+                $exitPrice = $totalValue / $totalSize;
+            }
+        }
+
+        // 損益計算
+        if ($position->side === 'long') {
+            $profitLoss = ($exitPrice - $position->entry_price) * $position->quantity;
+        } else {
+            $profitLoss = ($position->entry_price - $exitPrice) * $position->quantity;
+        }
+
+        $position->update([
+            'exit_price' => $exitPrice,
+            'exit_fee' => $fee,
+            'status' => 'closed',
+            'closed_at' => now(),
+            'profit_loss' => $profitLoss,
+            'exit_order_id' => null,
+            'exit_order_price' => null,
+        ]);
+
+        Log::info('Exit limit order executed', [
+            'symbol' => $symbol,
+            'position_id' => $position->id,
+            'side' => $position->side,
+            'entry_price' => $position->entry_price,
+            'exit_price' => $exitPrice,
+            'profit_loss' => $profitLoss,
+            'fee' => $fee,
+        ]);
+
+        TradingLog::create([
+            'symbol' => $symbol,
+            'action' => 'limit_exit_' . ($position->side === 'long' ? 'sell' : 'buy'),
+            'quantity' => $position->quantity,
+            'price' => $exitPrice,
+            'message' => sprintf(
+                '指値決済約定 - %s (エントリー: %.2f円 → 決済: %.2f円, 損益: %.4f円)',
+                $position->side === 'long' ? 'ロング' : 'ショート',
+                $position->entry_price,
+                $exitPrice,
+                $profitLoss
+            ),
+            'executed_at' => now(),
+        ]);
+
+        // エグジット通知を送信
+        $this->sendNotification(
+            'exit',
+            $symbol,
+            $position->side,
+            $exitPrice,
+            $position->quantity,
+            $profitLoss,
+            '指値決済約定（Maker手数料）',
+            $this->getPositionStrategyName($position)
+        );
+    }
+
+    /**
+     * 決済注文の約定チェック
+     */
+    private function checkExitOrderExecution(string $symbol): void
+    {
+        // 現在価格を取得
+        $currentPrice = $this->exchangeClient->getCurrentPrice($symbol);
+
+        $positions = Position::where('symbol', $symbol)
+            ->where('status', 'open')
+            ->whereNotNull('exit_order_id')
+            ->get();
+
+        foreach ($positions as $position) {
+            $orderStatus = $this->exchangeClient->getOrderStatus($position->exit_order_id);
+
+            if ($orderStatus['status'] === 'EXECUTED') {
+                $this->handleExecutedExitOrder($position, $symbol, $orderStatus);
+            } elseif (in_array($orderStatus['status'], ['CANCELED', 'EXPIRED', 'NOT_FOUND'])) {
+                // 注文が無効になっている場合は再発注
+                Log::warning('Exit order invalid, will be replaced', [
+                    'symbol' => $symbol,
+                    'position_id' => $position->id,
+                    'order_id' => $position->exit_order_id,
+                    'status' => $orderStatus['status'],
+                ]);
+
+                $position->update([
+                    'exit_order_id' => null,
+                    'exit_order_price' => null,
+                ]);
+            } elseif ($orderStatus['status'] === 'WAITING') {
+                // 価格が指値を大きく超えた場合は緊急成行決済
+                $emergencyThreshold = 0.005; // 0.5%
+
+                if ($position->side === 'long') {
+                    // ロング: 現在価格が指値より0.5%以上下
+                    if ($currentPrice < $position->exit_order_price * (1 - $emergencyThreshold)) {
+                        $this->executeEmergencyExit($position, $symbol, $currentPrice, 'price_gap_down');
+                    }
+                } else {
+                    // ショート: 現在価格が指値より0.5%以上上
+                    if ($currentPrice > $position->exit_order_price * (1 + $emergencyThreshold)) {
+                        $this->executeEmergencyExit($position, $symbol, $currentPrice, 'price_gap_up');
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * 緊急成行決済
+     */
+    private function executeEmergencyExit(Position $position, string $symbol, float $currentPrice, string $reason): void
+    {
+        // 既存の指値注文をキャンセル
+        $this->exchangeClient->cancelOrder($position->exit_order_id);
+
+        // 成行注文で決済
+        if ($position->side === 'long') {
+            $result = $this->exchangeClient->sell($symbol, $position->quantity, null);
+        } else {
+            $result = $this->exchangeClient->buy($symbol, $position->quantity, null);
+        }
+
+        if ($result['success']) {
+            if ($position->side === 'long') {
+                $profitLoss = ($result['price'] - $position->entry_price) * $position->quantity;
+            } else {
+                $profitLoss = ($position->entry_price - $result['price']) * $position->quantity;
+            }
+
+            $position->update([
+                'exit_price' => $result['price'],
+                'exit_fee' => $result['fee'] ?? 0,
+                'status' => 'closed',
+                'closed_at' => now(),
+                'profit_loss' => $profitLoss,
+                'exit_order_id' => null,
+                'exit_order_price' => null,
+            ]);
+
+            Log::warning('Emergency exit executed', [
+                'symbol' => $symbol,
+                'position_id' => $position->id,
+                'reason' => $reason,
+                'exit_order_price' => $position->exit_order_price,
+                'actual_exit_price' => $result['price'],
+                'profit_loss' => $profitLoss,
+            ]);
+
+            TradingLog::create([
+                'symbol' => $symbol,
+                'action' => 'emergency_exit_' . ($position->side === 'long' ? 'sell' : 'buy'),
+                'quantity' => $position->quantity,
+                'price' => $result['price'],
+                'message' => sprintf(
+                    '緊急成行決済 - %s (理由: %s, 指値: %.2f円 → 実際: %.2f円, 損益: %.4f円)',
+                    $position->side === 'long' ? 'ロング' : 'ショート',
+                    $reason,
+                    $position->exit_order_price,
+                    $result['price'],
+                    $profitLoss
+                ),
+                'executed_at' => now(),
+            ]);
+
+            $this->sendNotification(
+                'exit',
+                $symbol,
+                $position->side,
+                $result['price'],
+                $position->quantity,
+                $profitLoss,
+                '緊急成行決済（価格ギャップ検知）',
+                $this->getPositionStrategyName($position)
+            );
+        }
+    }
+
+    /**
      * トレーリングストップを更新（現在価格ベース）
      */
     private function updateTrailingStop(string $symbol, float $currentPrice): void
@@ -827,11 +1160,17 @@ class OrderExecutor
                     'entry_price' => $position->entry_price,
                     'initial_stop' => $initialStop,
                 ]);
+
+                // 決済指値注文を発注
+                $position->refresh();
+                $exitPrice = $this->calculateExitPrice($position, $initialStop);
+                $this->placeOrUpdateExitOrder($position, $symbol, $exitPrice);
                 continue;
             }
 
             // 現在のトレーリングストップより高い（有利）場合のみ更新
             if ($newTrailingStop > $position->trailing_stop_price) {
+                $oldStop = $position->trailing_stop_price;
                 $position->update([
                     'trailing_stop_price' => $newTrailingStop,
                 ]);
@@ -839,10 +1178,19 @@ class OrderExecutor
                 Log::info('Trailing stop updated - Long', [
                     'symbol' => $symbol,
                     'position_id' => $position->id,
-                    'old_stop' => $position->trailing_stop_price,
+                    'old_stop' => $oldStop,
                     'new_stop' => $newTrailingStop,
                     'current_price' => $currentPrice,
                 ]);
+
+                // 決済指値注文を更新
+                $position->refresh();
+                $exitPrice = $this->calculateExitPrice($position, $newTrailingStop);
+                $this->placeOrUpdateExitOrder($position, $symbol, $exitPrice);
+            } elseif (!$position->exit_order_id) {
+                // 指値注文がない場合は発注
+                $exitPrice = $this->calculateExitPrice($position, $position->trailing_stop_price);
+                $this->placeOrUpdateExitOrder($position, $symbol, $exitPrice);
             }
         }
 
@@ -871,11 +1219,17 @@ class OrderExecutor
                     'entry_price' => $position->entry_price,
                     'initial_stop' => $initialStop,
                 ]);
+
+                // 決済指値注文を発注
+                $position->refresh();
+                $exitPrice = $this->calculateExitPrice($position, $initialStop);
+                $this->placeOrUpdateExitOrder($position, $symbol, $exitPrice);
                 continue;
             }
 
             // 現在のトレーリングストップより低い（有利）場合のみ更新
             if ($newTrailingStop < $position->trailing_stop_price) {
+                $oldStop = $position->trailing_stop_price;
                 $position->update([
                     'trailing_stop_price' => $newTrailingStop,
                 ]);
@@ -883,29 +1237,43 @@ class OrderExecutor
                 Log::info('Trailing stop updated - Short', [
                     'symbol' => $symbol,
                     'position_id' => $position->id,
-                    'old_stop' => $position->trailing_stop_price,
+                    'old_stop' => $oldStop,
                     'new_stop' => $newTrailingStop,
                     'current_price' => $currentPrice,
                 ]);
+
+                // 決済指値注文を更新
+                $position->refresh();
+                $exitPrice = $this->calculateExitPrice($position, $newTrailingStop);
+                $this->placeOrUpdateExitOrder($position, $symbol, $exitPrice);
+            } elseif (!$position->exit_order_id) {
+                // 指値注文がない場合は発注
+                $exitPrice = $this->calculateExitPrice($position, $position->trailing_stop_price);
+                $this->placeOrUpdateExitOrder($position, $symbol, $exitPrice);
             }
         }
     }
 
     /**
-     * トレーリングストップによる決済チェック
+     * トレーリングストップによる決済チェック（フォールバック）
+     * 指値注文がないポジションに対してのみ成行で決済
      */
-    private function checkTrailingStop(string $symbol, float $currentPrice): void
+    private function checkTrailingStopFallback(string $symbol, float $currentPrice): void
     {
-        // ロングポジションのトレーリングストップチェック
+        // ロングポジションのトレーリングストップチェック（指値注文がないもののみ）
         $longPositions = Position::where('symbol', $symbol)
             ->where('side', 'long')
             ->where('status', 'open')
+            ->whereNull('exit_order_id')
             ->get();
 
         foreach ($longPositions as $position) {
-            if ($currentPrice <= $position->trailing_stop_price) {
-                // トレーリングストップで決済
-                $sellResult = $this->exchangeClient->sell($symbol, $position->quantity, null); // 成行注文
+            // 決済価格を計算（トレーリングストップと損切りの保護的な方）
+            $exitPrice = $this->calculateExitPrice($position, $position->trailing_stop_price);
+
+            if ($currentPrice <= $exitPrice) {
+                // 成行注文で決済（フォールバック）
+                $sellResult = $this->exchangeClient->sell($symbol, $position->quantity, null);
 
                 if ($sellResult['success']) {
                     $profitLoss = ($sellResult['price'] - $position->entry_price) * $position->quantity;
@@ -918,23 +1286,22 @@ class OrderExecutor
                         'profit_loss' => $profitLoss,
                     ]);
 
-                    Log::info('Trailing stop triggered - Long position closed', [
+                    Log::info('Fallback trailing stop triggered - Long position closed', [
                         'symbol' => $symbol,
                         'position_id' => $position->id,
                         'entry_price' => $position->entry_price,
                         'exit_price' => $sellResult['price'],
                         'trailing_stop' => $position->trailing_stop_price,
                         'profit_loss' => $profitLoss,
-                        'percentage' => ($profitLoss / ($position->entry_price * $position->quantity)) * 100,
                     ]);
 
                     TradingLog::create([
                         'symbol' => $symbol,
-                        'action' => 'trailing_stop_sell',
+                        'action' => 'fallback_trailing_stop_sell',
                         'quantity' => $position->quantity,
                         'price' => $sellResult['price'],
                         'message' => sprintf(
-                            'トレーリングストップ決済 - ロング (エントリー: %.2f円 → 決済: %.2f円, 損益: %.4f円)',
+                            'フォールバック決済 - ロング (エントリー: %.2f円 → 決済: %.2f円, 損益: %.4f円)',
                             $position->entry_price,
                             $sellResult['price'],
                             $profitLoss
@@ -942,7 +1309,6 @@ class OrderExecutor
                         'executed_at' => now(),
                     ]);
 
-                    // エグジット通知を送信（元の戦略名を使用）
                     $this->sendNotification(
                         'exit',
                         $symbol,
@@ -950,26 +1316,29 @@ class OrderExecutor
                         $sellResult['price'],
                         $position->quantity,
                         $profitLoss,
-                        'トレーリングストップ到達',
+                        'フォールバック成行決済（Taker手数料）',
                         $this->getPositionStrategyName($position)
                     );
                 }
             }
         }
 
-        // ショートポジションのトレーリングストップチェック
+        // ショートポジションのトレーリングストップチェック（指値注文がないもののみ）
         $shortPositions = Position::where('symbol', $symbol)
             ->where('side', 'short')
             ->where('status', 'open')
+            ->whereNull('exit_order_id')
             ->get();
 
         foreach ($shortPositions as $position) {
-            if ($currentPrice >= $position->trailing_stop_price) {
-                // トレーリングストップで決済（買い戻し）
-                $buyResult = $this->exchangeClient->buy($symbol, $position->quantity, null); // 成行注文
+            // 決済価格を計算（トレーリングストップと損切りの保護的な方）
+            $exitPrice = $this->calculateExitPrice($position, $position->trailing_stop_price);
+
+            if ($currentPrice >= $exitPrice) {
+                // 成行注文で決済（フォールバック）
+                $buyResult = $this->exchangeClient->buy($symbol, $position->quantity, null);
 
                 if ($buyResult['success']) {
-                    // ショートポジションの損益: (entry_price - exit_price) * quantity
                     $profitLoss = ($position->entry_price - $buyResult['price']) * $position->quantity;
 
                     $position->update([
@@ -980,23 +1349,22 @@ class OrderExecutor
                         'profit_loss' => $profitLoss,
                     ]);
 
-                    Log::info('Trailing stop triggered - Short position closed', [
+                    Log::info('Fallback trailing stop triggered - Short position closed', [
                         'symbol' => $symbol,
                         'position_id' => $position->id,
                         'entry_price' => $position->entry_price,
                         'exit_price' => $buyResult['price'],
                         'trailing_stop' => $position->trailing_stop_price,
                         'profit_loss' => $profitLoss,
-                        'percentage' => ($profitLoss / ($position->entry_price * $position->quantity)) * 100,
                     ]);
 
                     TradingLog::create([
                         'symbol' => $symbol,
-                        'action' => 'trailing_stop_buy',
+                        'action' => 'fallback_trailing_stop_buy',
                         'quantity' => $position->quantity,
                         'price' => $buyResult['price'],
                         'message' => sprintf(
-                            'トレーリングストップ決済 - ショート (エントリー: %.2f円 → 決済: %.2f円, 損益: %.4f円)',
+                            'フォールバック決済 - ショート (エントリー: %.2f円 → 決済: %.2f円, 損益: %.4f円)',
                             $position->entry_price,
                             $buyResult['price'],
                             $profitLoss
@@ -1004,7 +1372,6 @@ class OrderExecutor
                         'executed_at' => now(),
                     ]);
 
-                    // エグジット通知を送信（元の戦略名を使用）
                     $this->sendNotification(
                         'exit',
                         $symbol,
@@ -1012,7 +1379,7 @@ class OrderExecutor
                         $buyResult['price'],
                         $position->quantity,
                         $profitLoss,
-                        'トレーリングストップ到達',
+                        'フォールバック成行決済（Taker手数料）',
                         $this->getPositionStrategyName($position)
                     );
                 }
