@@ -124,7 +124,7 @@ class GMOCoinClient implements ExchangeClient
             ];
 
             if ($price !== null) {
-                $orderData['price'] = (string) $price;
+                $orderData['price'] = $this->formatPrice($symbol, $price);
             }
 
             $result = $this->sendPrivateRequest('POST', '/v1/order', $orderData);
@@ -181,7 +181,7 @@ class GMOCoinClient implements ExchangeClient
             ];
 
             if ($price !== null) {
-                $orderData['price'] = (string) $price;
+                $orderData['price'] = $this->formatPrice($symbol, $price);
             }
 
             $result = $this->sendPrivateRequest('POST', '/v1/order', $orderData);
@@ -560,5 +560,21 @@ class GMOCoinClient implements ExchangeClient
     {
         // GMOコインはベース通貨のみを使用
         return explode('/', $symbol)[0];
+    }
+
+
+    /**
+     * 価格を通貨ペアに応じた小数点桁数にフォーマット
+     * GMOコインのJPYペアは整数のみ受け付ける
+     */
+    private function formatPrice(string $symbol, float $price): string
+    {
+        // JPYペアは整数に丸める
+        if (str_contains($symbol, '/JPY')) {
+            return (string) round($price);
+        }
+
+        // その他は小数点2桁
+        return number_format($price, 2, '.', '');
     }
 }
