@@ -92,7 +92,11 @@ class LimitOrderTrailingStopTest extends TestCase
         return $mock;
     }
 
-    public function test_exit_order_placed_after_position_open(): void
+    /**
+     * GMOコイン現物取引ではSTOP注文がサポートされていないため、
+     * 指値注文は発注されず、フォールバック機構（成行決済）に任せる
+     */
+    public function test_exit_order_not_placed_after_position_open(): void
     {
         $settings = TradingSettings::create([
             'name' => 'Test Strategy',
@@ -122,16 +126,20 @@ class LimitOrderTrailingStopTest extends TestCase
             ->first();
 
         $this->assertNotNull($position);
-        $this->assertNotNull($position->exit_order_id);
-        $this->assertNotNull($position->exit_order_price);
+        // 指値注文は発注されない（GMOコイン現物取引ではSTOP注文が使えないため）
+        $this->assertNull($position->exit_order_id);
+        $this->assertNull($position->exit_order_price);
 
+        // トレーリングストップ価格は設定される
         // 初期トレーリングストップ: 320 * (1 - 0.7%) = 317.76
-        // 損切り価格: 320 * (1 - 1.0%) = 316.8
-        // ロングなのでmax(317.76, 316.8) = 317.76
-        $this->assertEqualsWithDelta(317.76, $position->exit_order_price, 0.01);
+        $this->assertEqualsWithDelta(317.76, $position->trailing_stop_price, 0.01);
     }
 
-    public function test_exit_order_updated_when_trailing_stop_moves(): void
+    /**
+     * 価格上昇時にトレーリングストップ価格のみ更新される
+     * （指値注文は発注されず、既存の指値はキャンセルされる）
+     */
+    public function test_trailing_stop_price_updated_when_price_moves(): void
     {
         $settings = TradingSettings::create([
             'name' => 'Test Strategy',
@@ -148,7 +156,7 @@ class LimitOrderTrailingStopTest extends TestCase
             'is_active' => true,
         ]);
 
-        // 既存のロングポジション（指値注文あり）
+        // 既存のロングポジション（旧仕様で指値注文がある場合を想定）
         $position = Position::create([
             'symbol' => 'XRP/JPY',
             'trading_settings_id' => $settings->id,
@@ -172,6 +180,7 @@ class LimitOrderTrailingStopTest extends TestCase
         $mock->shouldReceive('getCurrentPrice')->andReturn(330.0);
         $mock->shouldReceive('buy')->andReturn(['success' => true, 'order_id' => 'new-buy', 'price' => 330.0, 'fee' => 0]);
         $mock->shouldReceive('sell')->andReturn(['success' => true, 'order_id' => 'new-sell-order', 'price' => 330.0, 'fee' => 0]);
+        // 既存の指値注文はキャンセルされる
         $mock->shouldReceive('cancelOrder')->once()->with('old-order-123')->andReturn(['success' => true]);
         $mock->shouldReceive('getOrderStatus')->andReturn(['status' => 'WAITING']);
         $mock->shouldReceive('getExecutionsByOrderId')->andReturn([]);
@@ -187,8 +196,9 @@ class LimitOrderTrailingStopTest extends TestCase
         // 損切り価格: 320 * (1 - 1.0%) = 316.8
         // max(328.35, 316.8) = 328.35
         $this->assertEqualsWithDelta(328.35, $position->trailing_stop_price, 0.01);
-        $this->assertEquals('new-sell-order', $position->exit_order_id);
-        $this->assertEqualsWithDelta(328.35, $position->exit_order_price, 0.01);
+        // 新しい指値注文は発注されない
+        $this->assertNull($position->exit_order_id);
+        $this->assertNull($position->exit_order_price);
     }
 
     public function test_position_closed_when_exit_order_executed(): void
@@ -398,7 +408,10 @@ class LimitOrderTrailingStopTest extends TestCase
         $this->assertNull($position->exit_order_price);
     }
 
-    public function test_short_position_exit_order(): void
+    /**
+     * ショートポジションでも指値注文は発注されない
+     */
+    public function test_short_position_no_exit_order(): void
     {
         $settings = TradingSettings::create([
             'name' => 'Test Strategy',
@@ -429,12 +442,12 @@ class LimitOrderTrailingStopTest extends TestCase
             ->first();
 
         $this->assertNotNull($position);
-        $this->assertNotNull($position->exit_order_id);
-        $this->assertNotNull($position->exit_order_price);
+        // 指値注文は発注されない
+        $this->assertNull($position->exit_order_id);
+        $this->assertNull($position->exit_order_price);
 
+        // トレーリングストップ価格は設定される
         // 初期トレーリングストップ: 320 * (1 + 0.7%) = 322.24
-        // 損切り価格: 320 * (1 + 1.0%) = 323.2
-        // ショートなのでmin(322.24, 323.2) = 322.24
-        $this->assertEqualsWithDelta(322.24, $position->exit_order_price, 0.01);
+        $this->assertEqualsWithDelta(322.24, $position->trailing_stop_price, 0.01);
     }
 }
