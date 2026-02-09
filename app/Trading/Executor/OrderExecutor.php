@@ -99,6 +99,7 @@ class OrderExecutor
 
             return [
                 'success' => false,
+                'action' => 'error',
                 'message' => $e->getMessage(),
             ];
         }
@@ -263,6 +264,7 @@ class OrderExecutor
                 ]);
             }
 
+            $result['action'] = 'buy';
             return $result;
         }
 
@@ -288,6 +290,7 @@ class OrderExecutor
                 }
             }
 
+            $result['action'] = 'sell';
             return $result;
         }
 
@@ -438,11 +441,13 @@ class OrderExecutor
                 ]);
             }
 
+            $result['action'] = 'short';
             return $result;
         }
 
         return [
             'success' => false,
+            'action' => 'unknown',
             'message' => '不明なアクション: ' . $signal['action'],
         ];
     }
