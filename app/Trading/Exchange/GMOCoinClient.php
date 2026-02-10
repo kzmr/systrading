@@ -577,4 +577,110 @@ class GMOCoinClient implements ExchangeClient
         // その他は小数点2桁
         return number_format($price, 2, '.', '');
     }
+
+    /**
+     * 逆指値売り注文を発注（ロングポジションの損切り/トレーリングストップ用）
+     *
+     * 指定価格以下になったら成行で売り執行
+     *
+     * @see https://api.coin.z.com/docs/#order-post
+     */
+    public function stopSell(string $symbol, float $quantity, float $triggerPrice): array
+    {
+        try {
+            $gmoSymbol = $this->convertSymbol($symbol);
+
+            $orderData = [
+                'symbol' => $gmoSymbol,
+                'side' => 'SELL',
+                'executionType' => 'STOP',
+                'timeInForce' => 'FAK',
+                'price' => $this->formatPrice($symbol, $triggerPrice),
+                'size' => (string) $quantity,
+            ];
+
+            $result = $this->sendPrivateRequest('POST', '/v1/order', $orderData);
+
+            Log::info('GMO Coin stop sell order placed', [
+                'orderId' => $result['data'],
+                'symbol' => $symbol,
+                'quantity' => $quantity,
+                'triggerPrice' => $triggerPrice,
+            ]);
+
+            return [
+                'success' => true,
+                'order_id' => $result['data'],
+                'symbol' => $symbol,
+                'quantity' => $quantity,
+                'triggerPrice' => $triggerPrice,
+                'timestamp' => now()->toIso8601String(),
+            ];
+        } catch (\Exception $e) {
+            Log::error('GMO Coin stop sell order failed', [
+                'symbol' => $symbol,
+                'quantity' => $quantity,
+                'triggerPrice' => $triggerPrice,
+                'error' => $e->getMessage(),
+            ]);
+
+            return [
+                'success' => false,
+                'message' => $e->getMessage(),
+            ];
+        }
+    }
+
+    /**
+     * 逆指値買い注文を発注（ショートポジションの損切り/トレーリングストップ用）
+     *
+     * 指定価格以上になったら成行で買い執行
+     *
+     * @see https://api.coin.z.com/docs/#order-post
+     */
+    public function stopBuy(string $symbol, float $quantity, float $triggerPrice): array
+    {
+        try {
+            $gmoSymbol = $this->convertSymbol($symbol);
+
+            $orderData = [
+                'symbol' => $gmoSymbol,
+                'side' => 'BUY',
+                'executionType' => 'STOP',
+                'timeInForce' => 'FAK',
+                'price' => $this->formatPrice($symbol, $triggerPrice),
+                'size' => (string) $quantity,
+            ];
+
+            $result = $this->sendPrivateRequest('POST', '/v1/order', $orderData);
+
+            Log::info('GMO Coin stop buy order placed', [
+                'orderId' => $result['data'],
+                'symbol' => $symbol,
+                'quantity' => $quantity,
+                'triggerPrice' => $triggerPrice,
+            ]);
+
+            return [
+                'success' => true,
+                'order_id' => $result['data'],
+                'symbol' => $symbol,
+                'quantity' => $quantity,
+                'triggerPrice' => $triggerPrice,
+                'timestamp' => now()->toIso8601String(),
+            ];
+        } catch (\Exception $e) {
+            Log::error('GMO Coin stop buy order failed', [
+                'symbol' => $symbol,
+                'quantity' => $quantity,
+                'triggerPrice' => $triggerPrice,
+                'error' => $e->getMessage(),
+            ]);
+
+            return [
+                'success' => false,
+                'message' => $e->getMessage(),
+            ];
+        }
+    }
 }

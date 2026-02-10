@@ -862,40 +862,76 @@ class OrderExecutor
     }
 
     /**
-     * 決済指値注文を発注または更新
+     * 決済逆指値（STOP）注文を発注または更新
      *
-     * 注意: GMOコインの現物取引ではSTOP注文（逆指値）がサポートされていないため、
-     * トレーリングストップ/損切り用の指値注文は即時約定してしまう問題がある。
-     * そのため、この機能は無効化し、フォールバック機構（成行決済）に任せる。
+     * GMOコインの逆指値注文を使用:
+     * - ロングポジション: SELL STOP（価格が下がったら売り執行）
+     * - ショートポジション: BUY STOP（価格が上がったら買い執行）
      */
     private function placeOrUpdateExitOrder(Position $position, string $symbol, float $exitPrice): void
     {
-        // GMOコイン現物取引ではSTOP注文が使えないため、指値注文は発注しない
-        // 代わりにcheckTrailingStopFallbackで成行決済を行う
-        Log::debug('Exit order skipped - using fallback mechanism', [
-            'symbol' => $symbol,
-            'position_id' => $position->id,
-            'side' => $position->side,
-            'exit_price' => $exitPrice,
-            'reason' => 'GMO Coin spot trading does not support STOP orders',
-        ]);
+        // 既存の注文があり、価格が同じなら何もしない
+        if ($position->exit_order_id && abs($position->exit_order_price - $exitPrice) < 0.01) {
+            return;
+        }
 
         // 既存の注文があればキャンセル
         if ($position->exit_order_id) {
             $cancelResult = $this->exchangeClient->cancelOrder($position->exit_order_id);
 
             if ($cancelResult['success']) {
-                Log::info('Exit order canceled', [
+                Log::info('Exit order canceled for update', [
+                    'symbol' => $symbol,
+                    'position_id' => $position->id,
+                    'old_order_id' => $position->exit_order_id,
+                    'old_price' => $position->exit_order_price,
+                ]);
+            } else {
+                // キャンセル失敗の場合、注文状態を確認
+                $orderStatus = $this->exchangeClient->getOrderStatus($position->exit_order_id);
+
+                if ($orderStatus['status'] === 'EXECUTED') {
+                    // 既に約定している場合はポジションをクローズ
+                    $this->handleExecutedExitOrder($position, $symbol, $orderStatus);
+                    return;
+                }
+
+                Log::warning('Failed to cancel exit order', [
                     'symbol' => $symbol,
                     'position_id' => $position->id,
                     'order_id' => $position->exit_order_id,
-                ]);
-
-                $position->update([
-                    'exit_order_id' => null,
-                    'exit_order_price' => null,
+                    'status' => $orderStatus['status'],
                 ]);
             }
+        }
+
+        // 新しい逆指値注文を発注
+        if ($position->side === 'long') {
+            $orderResult = $this->exchangeClient->stopSell($symbol, $position->quantity, $exitPrice);
+        } else {
+            $orderResult = $this->exchangeClient->stopBuy($symbol, $position->quantity, $exitPrice);
+        }
+
+        if ($orderResult['success']) {
+            $position->update([
+                'exit_order_id' => $orderResult['order_id'],
+                'exit_order_price' => $exitPrice,
+            ]);
+
+            Log::info('Exit stop order placed', [
+                'symbol' => $symbol,
+                'position_id' => $position->id,
+                'side' => $position->side,
+                'order_id' => $orderResult['order_id'],
+                'trigger_price' => $exitPrice,
+            ]);
+        } else {
+            Log::error('Failed to place exit stop order', [
+                'symbol' => $symbol,
+                'position_id' => $position->id,
+                'trigger_price' => $exitPrice,
+                'error' => $orderResult['message'] ?? 'Unknown error',
+            ]);
         }
     }
 

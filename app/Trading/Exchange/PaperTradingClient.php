@@ -185,7 +185,7 @@ class PaperTradingClient implements ExchangeClient
 
     /**
      * 注文状態を取得
-     * ペーパートレードでは、指値注文が約定可能かどうかをチェック
+     * ペーパートレードでは、指値/逆指値注文が約定可能かどうかをチェック
      */
     public function getOrderStatus(string $orderId): array
     {
@@ -198,27 +198,44 @@ class PaperTradingClient implements ExchangeClient
 
         $order = $this->limitOrders[$orderId];
         $currentPrice = $this->getCurrentPrice($order['symbol']);
+        $isStopOrder = ($order['executionType'] ?? 'LIMIT') === 'STOP';
 
         // 約定判定：
-        // SELL指値: 現在価格 >= 指値価格 で約定
-        // BUY指値: 現在価格 <= 指値価格 で約定
+        // LIMIT注文:
+        //   SELL指値: 現在価格 >= 指値価格 で約定
+        //   BUY指値: 現在価格 <= 指値価格 で約定
+        // STOP注文（逆指値）:
+        //   SELL逆指値: 現在価格 <= 逆指値価格 で約定
+        //   BUY逆指値: 現在価格 >= 逆指値価格 で約定
         $shouldExecute = false;
-        if ($order['side'] === 'SELL' && $currentPrice >= $order['price']) {
-            $shouldExecute = true;
-        } elseif ($order['side'] === 'BUY' && $currentPrice <= $order['price']) {
-            $shouldExecute = true;
+        if ($isStopOrder) {
+            // STOP注文の約定判定
+            if ($order['side'] === 'SELL' && $currentPrice <= $order['price']) {
+                $shouldExecute = true;
+            } elseif ($order['side'] === 'BUY' && $currentPrice >= $order['price']) {
+                $shouldExecute = true;
+            }
+        } else {
+            // LIMIT注文の約定判定
+            if ($order['side'] === 'SELL' && $currentPrice >= $order['price']) {
+                $shouldExecute = true;
+            } elseif ($order['side'] === 'BUY' && $currentPrice <= $order['price']) {
+                $shouldExecute = true;
+            }
         }
 
         if ($shouldExecute) {
-            // 約定処理
+            // 約定処理（STOP注文は現在価格で約定、LIMIT注文は指値価格で約定）
+            $executedPrice = $isStopOrder ? $currentPrice : $order['price'];
             $this->limitOrders[$orderId]['status'] = 'EXECUTED';
-            $this->limitOrders[$orderId]['executedPrice'] = $order['price'];
+            $this->limitOrders[$orderId]['executedPrice'] = $executedPrice;
             $this->saveState();
 
             return [
                 'status' => 'EXECUTED',
                 'order_id' => $orderId,
                 'side' => $order['side'],
+                'executionType' => $order['executionType'] ?? 'LIMIT',
                 'price' => $order['price'],
                 'size' => $order['size'],
                 'executedSize' => $order['size'],
@@ -229,6 +246,7 @@ class PaperTradingClient implements ExchangeClient
             'status' => 'WAITING',
             'order_id' => $orderId,
             'side' => $order['side'],
+            'executionType' => $order['executionType'] ?? 'LIMIT',
             'price' => $order['price'],
             'size' => $order['size'],
             'executedSize' => 0,
@@ -278,6 +296,64 @@ class PaperTradingClient implements ExchangeClient
                 'size' => $order['size'],
                 'fee' => $fee,
             ],
+        ];
+    }
+
+    /**
+     * 逆指値売り注文を発注（ロングポジションの損切り/トレーリングストップ用）
+     *
+     * 指定価格以下になったら成行で売り執行
+     */
+    public function stopSell(string $symbol, float $quantity, float $triggerPrice): array
+    {
+        $orderId = 'paper_stop_' . uniqid();
+        $this->limitOrders[$orderId] = [
+            'symbol' => $symbol,
+            'side' => 'SELL',
+            'size' => $quantity,
+            'price' => $triggerPrice,
+            'executionType' => 'STOP',
+            'status' => 'WAITING',
+            'timestamp' => now()->toIso8601String(),
+        ];
+        $this->saveState();
+
+        return [
+            'success' => true,
+            'order_id' => $orderId,
+            'symbol' => $symbol,
+            'quantity' => $quantity,
+            'triggerPrice' => $triggerPrice,
+            'timestamp' => now()->toIso8601String(),
+        ];
+    }
+
+    /**
+     * 逆指値買い注文を発注（ショートポジションの損切り/トレーリングストップ用）
+     *
+     * 指定価格以上になったら成行で買い執行
+     */
+    public function stopBuy(string $symbol, float $quantity, float $triggerPrice): array
+    {
+        $orderId = 'paper_stop_' . uniqid();
+        $this->limitOrders[$orderId] = [
+            'symbol' => $symbol,
+            'side' => 'BUY',
+            'size' => $quantity,
+            'price' => $triggerPrice,
+            'executionType' => 'STOP',
+            'status' => 'WAITING',
+            'timestamp' => now()->toIso8601String(),
+        ];
+        $this->saveState();
+
+        return [
+            'success' => true,
+            'order_id' => $orderId,
+            'symbol' => $symbol,
+            'quantity' => $quantity,
+            'triggerPrice' => $triggerPrice,
+            'timestamp' => now()->toIso8601String(),
         ];
     }
 }
