@@ -862,7 +862,11 @@ class OrderExecutor
     }
 
     /**
-     * 決済指値注文を発注または更新
+     * 決済逆指値（STOP）注文を発注または更新
+     *
+     * GMOコインの逆指値注文を使用:
+     * - ロングポジション: SELL STOP（価格が下がったら売り執行）
+     * - ショートポジション: BUY STOP（価格が上がったら買い執行）
      */
     private function placeOrUpdateExitOrder(Position $position, string $symbol, float $exitPrice): void
     {
@@ -901,11 +905,11 @@ class OrderExecutor
             }
         }
 
-        // 新しい指値注文を発注
+        // 新しい逆指値注文を発注
         if ($position->side === 'long') {
-            $orderResult = $this->exchangeClient->sell($symbol, $position->quantity, $exitPrice);
+            $orderResult = $this->exchangeClient->stopSell($symbol, $position->quantity, $exitPrice);
         } else {
-            $orderResult = $this->exchangeClient->buy($symbol, $position->quantity, $exitPrice);
+            $orderResult = $this->exchangeClient->stopBuy($symbol, $position->quantity, $exitPrice);
         }
 
         if ($orderResult['success']) {
@@ -914,18 +918,18 @@ class OrderExecutor
                 'exit_order_price' => $exitPrice,
             ]);
 
-            Log::info('Exit limit order placed', [
+            Log::info('Exit stop order placed', [
                 'symbol' => $symbol,
                 'position_id' => $position->id,
                 'side' => $position->side,
                 'order_id' => $orderResult['order_id'],
-                'exit_price' => $exitPrice,
+                'trigger_price' => $exitPrice,
             ]);
         } else {
-            Log::error('Failed to place exit limit order', [
+            Log::error('Failed to place exit stop order', [
                 'symbol' => $symbol,
                 'position_id' => $position->id,
-                'exit_price' => $exitPrice,
+                'trigger_price' => $exitPrice,
                 'error' => $orderResult['message'] ?? 'Unknown error',
             ]);
         }

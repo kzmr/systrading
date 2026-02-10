@@ -56,6 +56,25 @@ class OrderExecutorFeeTest extends TestCase
             'timestamp' => now()->toIso8601String(),
         ]);
 
+        // STOP注文用のモック
+        $mock->shouldReceive('stopSell')->andReturn([
+            'success' => true,
+            'order_id' => 'stop-sell-order-' . uniqid(),
+            'symbol' => 'XRP/JPY',
+            'quantity' => 1,
+            'triggerPrice' => $price * 0.993,
+            'timestamp' => now()->toIso8601String(),
+        ]);
+
+        $mock->shouldReceive('stopBuy')->andReturn([
+            'success' => true,
+            'order_id' => 'stop-buy-order-' . uniqid(),
+            'symbol' => 'XRP/JPY',
+            'quantity' => 1,
+            'triggerPrice' => $price * 1.007,
+            'timestamp' => now()->toIso8601String(),
+        ]);
+
         // 新しいメソッドのモック
         $mock->shouldReceive('cancelOrder')->andReturn([
             'success' => true,
@@ -284,6 +303,16 @@ class OrderExecutorFeeTest extends TestCase
             'quantity' => 1,
             'price' => 320.0,
             'timestamp' => now()->toIso8601String(),
+        ]);
+        $mock->shouldReceive('stopSell')->andReturn([
+            'success' => true,
+            'order_id' => 'stop-sell-order-' . uniqid(),
+            'triggerPrice' => 317.76,
+        ]);
+        $mock->shouldReceive('stopBuy')->andReturn([
+            'success' => true,
+            'order_id' => 'stop-buy-order-' . uniqid(),
+            'triggerPrice' => 322.24,
         ]);
         $mock->shouldReceive('cancelOrder')->andReturn(['success' => true]);
         $mock->shouldReceive('getOrderStatus')->andReturn(['status' => 'WAITING']);

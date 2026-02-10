@@ -89,4 +89,28 @@ interface ExchangeClient
      * @return array 約定情報のリスト
      */
     public function getExecutionsByOrderId(string $orderId): array;
+
+    /**
+     * 逆指値売り注文を発注（ロングポジションの損切り/トレーリングストップ用）
+     *
+     * 指定価格以下になったら成行で売り執行
+     *
+     * @param string $symbol 通貨ペア
+     * @param float $quantity 数量
+     * @param float $triggerPrice 逆指値価格
+     * @return array 注文結果
+     */
+    public function stopSell(string $symbol, float $quantity, float $triggerPrice): array;
+
+    /**
+     * 逆指値買い注文を発注（ショートポジションの損切り/トレーリングストップ用）
+     *
+     * 指定価格以上になったら成行で買い執行
+     *
+     * @param string $symbol 通貨ペア
+     * @param float $quantity 数量
+     * @param float $triggerPrice 逆指値価格
+     * @return array 注文結果
+     */
+    public function stopBuy(string $symbol, float $quantity, float $triggerPrice): array;
 }

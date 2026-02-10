@@ -54,6 +54,25 @@ class LimitOrderTrailingStopTest extends TestCase
             'timestamp' => now()->toIso8601String(),
         ]);
 
+        // STOP注文用のモック
+        $mock->shouldReceive('stopSell')->andReturn([
+            'success' => true,
+            'order_id' => 'stop-sell-order-' . uniqid(),
+            'symbol' => 'XRP/JPY',
+            'quantity' => 10,
+            'triggerPrice' => $price * 0.993, // 0.7% below
+            'timestamp' => now()->toIso8601String(),
+        ]);
+
+        $mock->shouldReceive('stopBuy')->andReturn([
+            'success' => true,
+            'order_id' => 'stop-buy-order-' . uniqid(),
+            'symbol' => 'XRP/JPY',
+            'quantity' => 10,
+            'triggerPrice' => $price * 1.007, // 0.7% above
+            'timestamp' => now()->toIso8601String(),
+        ]);
+
         $mock->shouldReceive('cancelOrder')->andReturn([
             'success' => true,
         ]);
@@ -92,7 +111,10 @@ class LimitOrderTrailingStopTest extends TestCase
         return $mock;
     }
 
-    public function test_exit_order_placed_after_position_open(): void
+    /**
+     * ポジションオープン後、逆指値（STOP）注文が発注される
+     */
+    public function test_stop_order_placed_after_position_open(): void
     {
         $settings = TradingSettings::create([
             'name' => 'Test Strategy',
@@ -122,6 +144,7 @@ class LimitOrderTrailingStopTest extends TestCase
             ->first();
 
         $this->assertNotNull($position);
+        // 逆指値（STOP）注文が発注される
         $this->assertNotNull($position->exit_order_id);
         $this->assertNotNull($position->exit_order_price);
 
@@ -131,7 +154,10 @@ class LimitOrderTrailingStopTest extends TestCase
         $this->assertEqualsWithDelta(317.76, $position->exit_order_price, 0.01);
     }
 
-    public function test_exit_order_updated_when_trailing_stop_moves(): void
+    /**
+     * 価格上昇時に逆指値注文が更新される
+     */
+    public function test_stop_order_updated_when_trailing_stop_moves(): void
     {
         $settings = TradingSettings::create([
             'name' => 'Test Strategy',
@@ -148,7 +174,7 @@ class LimitOrderTrailingStopTest extends TestCase
             'is_active' => true,
         ]);
 
-        // 既存のロングポジション（指値注文あり）
+        // 既存のロングポジション（逆指値注文あり）
         $position = Position::create([
             'symbol' => 'XRP/JPY',
             'trading_settings_id' => $settings->id,
@@ -172,7 +198,14 @@ class LimitOrderTrailingStopTest extends TestCase
         $mock->shouldReceive('getCurrentPrice')->andReturn(330.0);
         $mock->shouldReceive('buy')->andReturn(['success' => true, 'order_id' => 'new-buy', 'price' => 330.0, 'fee' => 0]);
         $mock->shouldReceive('sell')->andReturn(['success' => true, 'order_id' => 'new-sell-order', 'price' => 330.0, 'fee' => 0]);
+        // 既存の注文はキャンセルされる
         $mock->shouldReceive('cancelOrder')->once()->with('old-order-123')->andReturn(['success' => true]);
+        // 新しい逆指値注文が発注される
+        $mock->shouldReceive('stopSell')->once()->andReturn([
+            'success' => true,
+            'order_id' => 'new-stop-sell-order',
+            'triggerPrice' => 328.35,
+        ]);
         $mock->shouldReceive('getOrderStatus')->andReturn(['status' => 'WAITING']);
         $mock->shouldReceive('getExecutionsByOrderId')->andReturn([]);
 
@@ -187,7 +220,8 @@ class LimitOrderTrailingStopTest extends TestCase
         // 損切り価格: 320 * (1 - 1.0%) = 316.8
         // max(328.35, 316.8) = 328.35
         $this->assertEqualsWithDelta(328.35, $position->trailing_stop_price, 0.01);
-        $this->assertEquals('new-sell-order', $position->exit_order_id);
+        // 新しい逆指値注文が発注される
+        $this->assertEquals('new-stop-sell-order', $position->exit_order_id);
         $this->assertEqualsWithDelta(328.35, $position->exit_order_price, 0.01);
     }
 
@@ -398,7 +432,10 @@ class LimitOrderTrailingStopTest extends TestCase
         $this->assertNull($position->exit_order_price);
     }
 
-    public function test_short_position_exit_order(): void
+    /**
+     * ショートポジションでも逆指値（STOP）注文が発注される
+     */
+    public function test_short_position_stop_order(): void
     {
         $settings = TradingSettings::create([
             'name' => 'Test Strategy',
@@ -429,6 +466,7 @@ class LimitOrderTrailingStopTest extends TestCase
             ->first();
 
         $this->assertNotNull($position);
+        // 逆指値（STOP）注文が発注される
         $this->assertNotNull($position->exit_order_id);
         $this->assertNotNull($position->exit_order_price);
 
