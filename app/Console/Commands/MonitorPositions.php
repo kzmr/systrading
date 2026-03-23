@@ -30,10 +30,13 @@ class MonitorPositions extends Command
 
         $exchangeClient = $this->getExchangeClient();
         $monitor = new PositionMonitor($exchangeClient);
+        $cycleCount = 0;
+        $statusInterval = max(1, intval(60 / $interval)); // 約1分ごとにステータス出力
 
         while (true) {
             try {
                 $result = $monitor->monitorAll();
+                $cycleCount++;
 
                 if ($result['monitored'] > 0) {
                     $actionCount = count($result['actions']);
@@ -44,6 +47,8 @@ class MonitorPositions extends Command
                         foreach ($result['actions'] as $action) {
                             $this->line("  - {$action['action']}: {$action['symbol']} (ID:{$action['position_id']})");
                         }
+                    } elseif ($cycleCount % $statusInterval === 0) {
+                        $this->line("[{$timestamp}] 監視中: {$result['monitored']}ポジション - 変動なし");
                     }
                 }
             } catch (\Exception $e) {
