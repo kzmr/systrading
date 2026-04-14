@@ -14,8 +14,14 @@ class BacktestHighLowBreakout extends Command
         {--initial-trailing=0.7 : Initial trailing stop percentage}
         {--trailing-offset=0.5 : Trailing stop offset percentage}
         {--max-positions=3 : Maximum positions per direction}
+        {--trend-ma-period=60 : Trend filter MA period}
+        {--trend-threshold=0.3 : Trend filter threshold percentage (0=disabled)}
+        {--vol-period=0 : Volatility filter period (0=disabled)}
+        {--vol-threshold=0 : Volatility filter threshold percentage}
         {--csv= : Path to CSV file for price data}
-        {--optimize : Run parameter optimization}';
+        {--optimize : Run parameter optimization}
+        {--optimize-trend : Run trend filter optimization with fixed base params}
+        {--optimize-vol : Run volatility filter optimization with fixed base params}';
 
     protected $description = 'Backtest HighLowBreakout Strategy with optional parameter optimization';
 
@@ -29,6 +35,14 @@ class BacktestHighLowBreakout extends Command
 
     public function handle()
     {
+        if ($this->option('optimize-vol')) {
+            return $this->runVolatilityOptimization();
+        }
+
+        if ($this->option('optimize-trend')) {
+            return $this->runTrendOptimization();
+        }
+
         if ($this->option('optimize')) {
             return $this->runOptimization();
         }
@@ -45,6 +59,8 @@ class BacktestHighLowBreakout extends Command
         $initialTrailing = (float) $this->option('initial-trailing');
         $trailingOffset = (float) $this->option('trailing-offset');
         $maxPositions = (int) $this->option('max-positions');
+        $trendMaPeriod = (int) $this->option('trend-ma-period');
+        $trendThreshold = (float) $this->option('trend-threshold');
 
         $this->info("\n=== HighLowBreakout Strategy Backtest ===");
         $this->info("Symbol: {$symbol}");
@@ -54,6 +70,8 @@ class BacktestHighLowBreakout extends Command
         $this->info("Initial Trailing Stop: {$initialTrailing}%");
         $this->info("Trailing Offset: {$trailingOffset}%");
         $this->info("Max Positions: {$maxPositions}");
+        $this->info("Trend MA Period: {$trendMaPeriod}");
+        $this->info("Trend Threshold: {$trendThreshold}%");
 
         $prices = $this->loadPriceHistory($symbol);
 
@@ -65,7 +83,7 @@ class BacktestHighLowBreakout extends Command
         $this->info("Price data: " . count($prices) . " records");
         $this->info("Period: " . $prices[0]['recorded_at'] . " to " . end($prices)['recorded_at']);
 
-        $result = $this->simulate($prices, $threshold, $lookback, $stopLoss, $initialTrailing, $trailingOffset, $maxPositions);
+        $result = $this->simulate($prices, $threshold, $lookback, $stopLoss, $initialTrailing, $trailingOffset, $maxPositions, $trendMaPeriod, $trendThreshold);
 
         $this->displayResults($result);
 
@@ -188,6 +206,293 @@ class BacktestHighLowBreakout extends Command
         return 0;
     }
 
+    private function runVolatilityOptimization(): int
+    {
+        $symbol = $this->option('symbol');
+        $this->info("\n=== Volatility Filter Optimization ===");
+        $this->info("Symbol: {$symbol}");
+
+        $prices = $this->loadPriceHistory($symbol);
+
+        if (count($prices) < 200) {
+            $this->error("Not enough price data for optimization.");
+            return 1;
+        }
+
+        $this->info("Price data: " . count($prices) . " records");
+        $this->info("Period: " . $prices[0]['recorded_at'] . " to " . end($prices)['recorded_at']);
+
+        // 固定パラメータ
+        $threshold = (float) $this->option('threshold');
+        $lookback = (int) $this->option('lookback');
+        $stopLoss = (float) $this->option('stop-loss');
+        $initialTrailing = (float) $this->option('initial-trailing');
+        $trailingOffset = (float) $this->option('trailing-offset');
+        $maxPositions = (int) $this->option('max-positions');
+
+        $this->info("Base params: threshold={$threshold}%, LB={$lookback}, SL={$stopLoss}%, TS_init={$initialTrailing}%, TS_offset={$trailingOffset}%, maxPos={$maxPositions}");
+
+        // ボラティリティフィルターパラメータ範囲
+        $volPeriods = [0, 60, 120, 180, 240, 360, 480, 720];  // 0=無効
+        $volThresholds = [0.5, 1.0, 1.5, 2.0, 2.5, 3.0, 4.0, 5.0];
+
+        $results = [];
+        $totalCombinations = (count($volPeriods) - 1) * count($volThresholds) + 1;
+
+        $this->info("Testing {$totalCombinations} combinations (including baseline without filter)...\n");
+
+        $progressBar = $this->output->createProgressBar($totalCombinations);
+        $progressBar->start();
+
+        // ベースライン（フィルター無効）
+        $this->positions = [];
+        $this->closedTrades = [];
+        $this->nextPositionId = 1;
+
+        $baseResult = $this->simulate(
+            $prices, $threshold, $lookback, $stopLoss,
+            $initialTrailing, $trailingOffset, $maxPositions,
+            0, 0, 0, 0
+        );
+
+        $results[] = [
+            'vol_period' => 0,
+            'vol_threshold' => 0,
+            'total_trades' => $baseResult['total_trades'],
+            'win_rate' => $baseResult['win_rate'],
+            'total_pnl' => $baseResult['total_pnl'],
+            'profit_factor' => $baseResult['profit_factor'],
+            'avg_pnl' => $baseResult['avg_pnl'],
+            'max_drawdown' => $baseResult['max_drawdown'],
+        ];
+        $progressBar->advance();
+
+        // ボラティリティフィルターあり
+        foreach ($volPeriods as $volPeriod) {
+            if ($volPeriod === 0) continue;
+
+            foreach ($volThresholds as $volThreshold) {
+                $this->positions = [];
+                $this->closedTrades = [];
+                $this->nextPositionId = 1;
+
+                $result = $this->simulate(
+                    $prices, $threshold, $lookback, $stopLoss,
+                    $initialTrailing, $trailingOffset, $maxPositions,
+                    0, 0, $volPeriod, $volThreshold
+                );
+
+                $results[] = [
+                    'vol_period' => $volPeriod,
+                    'vol_threshold' => $volThreshold,
+                    'total_trades' => $result['total_trades'],
+                    'win_rate' => $result['win_rate'],
+                    'total_pnl' => $result['total_pnl'],
+                    'profit_factor' => $result['profit_factor'],
+                    'avg_pnl' => $result['avg_pnl'],
+                    'max_drawdown' => $result['max_drawdown'],
+                ];
+
+                $progressBar->advance();
+            }
+        }
+
+        $progressBar->finish();
+        $this->newLine(2);
+
+        $this->info("Valid combinations: " . count($results));
+
+        // 結果表示
+        usort($results, fn($a, $b) => $b['total_pnl'] <=> $a['total_pnl']);
+        $this->info("\n=== Top 15 by Total P&L ===\n");
+        $this->displayVolResultsTable(array_slice($results, 0, 15));
+
+        usort($results, fn($a, $b) => $b['profit_factor'] <=> $a['profit_factor']);
+        $this->info("\n=== Top 15 by Profit Factor ===\n");
+        $this->displayVolResultsTable(array_slice($results, 0, 15));
+
+        usort($results, function($a, $b) {
+            $scoreA = $a['max_drawdown'] != 0 ? $a['total_pnl'] / abs($a['max_drawdown']) : 0;
+            $scoreB = $b['max_drawdown'] != 0 ? $b['total_pnl'] / abs($b['max_drawdown']) : 0;
+            return $scoreB <=> $scoreA;
+        });
+        $this->info("\n=== Top 15 by Risk-Adjusted Return (P&L / MaxDD) ===\n");
+        $this->displayVolResultsTable(array_slice($results, 0, 15));
+
+        return 0;
+    }
+
+    private function displayVolResultsTable(array $results): void
+    {
+        $this->table(
+            ['Vol期間', 'Vol閾値%', '取引数', '勝率%', '純損益', 'PF', '平均損益', 'MaxDD'],
+            array_map(function ($r) {
+                $label = $r['vol_period'] === 0 ? 'OFF' : $r['vol_period'];
+                $thLabel = $r['vol_period'] === 0 ? '-' : $r['vol_threshold'];
+                return [
+                    $label,
+                    $thLabel,
+                    $r['total_trades'],
+                    number_format($r['win_rate'], 1),
+                    number_format($r['total_pnl'], 0),
+                    number_format($r['profit_factor'], 2),
+                    number_format($r['avg_pnl'], 0),
+                    number_format($r['max_drawdown'], 0),
+                ];
+            }, $results)
+        );
+    }
+
+    private function runTrendOptimization(): int
+    {
+        $symbol = $this->option('symbol');
+        $this->info("\n=== Trend Filter Optimization ===");
+        $this->info("Symbol: {$symbol}");
+
+        $prices = $this->loadPriceHistory($symbol);
+
+        if (count($prices) < 200) {
+            $this->error("Not enough price data for optimization.");
+            return 1;
+        }
+
+        $this->info("Price data: " . count($prices) . " records");
+        $this->info("Period: " . $prices[0]['recorded_at'] . " to " . end($prices)['recorded_at']);
+
+        // 固定パラメータ（最適化済み）
+        $threshold = (float) $this->option('threshold');
+        $lookback = (int) $this->option('lookback');
+        $stopLoss = (float) $this->option('stop-loss');
+        $initialTrailing = (float) $this->option('initial-trailing');
+        $trailingOffset = (float) $this->option('trailing-offset');
+        $maxPositions = (int) $this->option('max-positions');
+
+        $this->info("Base params: threshold={$threshold}%, LB={$lookback}, SL={$stopLoss}%, TS_init={$initialTrailing}%, TS_offset={$trailingOffset}%, maxPos={$maxPositions}");
+
+        // トレンドフィルターパラメータ範囲
+        $trendMaPeriods = [0, 30, 60, 90, 120, 180, 240];  // 0=フィルター無効
+        $trendThresholds = [0.1, 0.2, 0.3, 0.5, 0.7, 1.0, 1.5, 2.0];
+
+        $results = [];
+        $totalCombinations = count($trendMaPeriods) * count($trendThresholds);
+
+        // MA=0（フィルター無効）のベースラインも含めるため+1は不要（0は閾値に関係なく同じ結果）
+        // MA=0の場合は閾値をスキップして1回だけ実行
+        $totalCombinations = (count($trendMaPeriods) - 1) * count($trendThresholds) + 1;
+
+        $this->info("Testing {$totalCombinations} combinations (including baseline without filter)...\n");
+
+        $progressBar = $this->output->createProgressBar($totalCombinations);
+        $progressBar->start();
+
+        // ベースライン（フィルター無効）
+        $this->positions = [];
+        $this->closedTrades = [];
+        $this->nextPositionId = 1;
+
+        $baseResult = $this->simulate(
+            $prices, $threshold, $lookback, $stopLoss,
+            $initialTrailing, $trailingOffset, $maxPositions,
+            0, 0
+        );
+
+        if ($baseResult['total_trades'] >= 5) {
+            $results[] = [
+                'trend_ma_period' => 0,
+                'trend_threshold' => 0,
+                'total_trades' => $baseResult['total_trades'],
+                'win_rate' => $baseResult['win_rate'],
+                'total_pnl' => $baseResult['total_pnl'],
+                'profit_factor' => $baseResult['profit_factor'],
+                'avg_pnl' => $baseResult['avg_pnl'],
+                'max_drawdown' => $baseResult['max_drawdown'],
+            ];
+        }
+        $progressBar->advance();
+
+        // トレンドフィルターあり
+        foreach ($trendMaPeriods as $maPeriod) {
+            if ($maPeriod === 0) continue;
+
+            foreach ($trendThresholds as $trendThreshold) {
+                $this->positions = [];
+                $this->closedTrades = [];
+                $this->nextPositionId = 1;
+
+                $result = $this->simulate(
+                    $prices, $threshold, $lookback, $stopLoss,
+                    $initialTrailing, $trailingOffset, $maxPositions,
+                    $maPeriod, $trendThreshold
+                );
+
+                if ($result['total_trades'] >= 5) {
+                    $results[] = [
+                        'trend_ma_period' => $maPeriod,
+                        'trend_threshold' => $trendThreshold,
+                        'total_trades' => $result['total_trades'],
+                        'win_rate' => $result['win_rate'],
+                        'total_pnl' => $result['total_pnl'],
+                        'profit_factor' => $result['profit_factor'],
+                        'avg_pnl' => $result['avg_pnl'],
+                        'max_drawdown' => $result['max_drawdown'],
+                    ];
+                }
+
+                $progressBar->advance();
+            }
+        }
+
+        $progressBar->finish();
+        $this->newLine(2);
+
+        if (empty($results)) {
+            $this->warn("No valid results.");
+            return 1;
+        }
+
+        $this->info("Valid combinations: " . count($results));
+
+        // 結果表示
+        usort($results, fn($a, $b) => $b['total_pnl'] <=> $a['total_pnl']);
+        $this->info("\n=== Top 15 by Total P&L ===\n");
+        $this->displayTrendResultsTable(array_slice($results, 0, 15));
+
+        usort($results, fn($a, $b) => $b['profit_factor'] <=> $a['profit_factor']);
+        $this->info("\n=== Top 15 by Profit Factor ===\n");
+        $this->displayTrendResultsTable(array_slice($results, 0, 15));
+
+        usort($results, function($a, $b) {
+            $scoreA = $a['max_drawdown'] != 0 ? $a['total_pnl'] / abs($a['max_drawdown']) : 0;
+            $scoreB = $b['max_drawdown'] != 0 ? $b['total_pnl'] / abs($b['max_drawdown']) : 0;
+            return $scoreB <=> $scoreA;
+        });
+        $this->info("\n=== Top 15 by Risk-Adjusted Return (P&L / MaxDD) ===\n");
+        $this->displayTrendResultsTable(array_slice($results, 0, 15));
+
+        return 0;
+    }
+
+    private function displayTrendResultsTable(array $results): void
+    {
+        $this->table(
+            ['MA期間', '閾値%', '取引数', '勝率%', '純損益', 'PF', '平均損益', 'MaxDD'],
+            array_map(function ($r) {
+                $label = $r['trend_ma_period'] === 0 ? 'OFF' : $r['trend_ma_period'];
+                $thLabel = $r['trend_ma_period'] === 0 ? '-' : $r['trend_threshold'];
+                return [
+                    $label,
+                    $thLabel,
+                    $r['total_trades'],
+                    number_format($r['win_rate'], 1),
+                    number_format($r['total_pnl'], 0),
+                    number_format($r['profit_factor'], 2),
+                    number_format($r['avg_pnl'], 0),
+                    number_format($r['max_drawdown'], 0),
+                ];
+            }, $results)
+        );
+    }
+
     private function displayResultsTable(array $results): void
     {
         $this->table(
@@ -217,17 +522,25 @@ class BacktestHighLowBreakout extends Command
         float $stopLoss,
         float $initialTrailing,
         float $trailingOffset,
-        int $maxPositions
+        int $maxPositions,
+        int $trendMaPeriod = 0,
+        float $trendThreshold = 0.0,
+        int $volPeriod = 0,
+        float $volThreshold = 0.0
     ): array {
         $this->positions = [];
         $this->closedTrades = [];
         $this->nextPositionId = 1;
 
+        $trendFilterEnabled = $trendMaPeriod > 0 && $trendThreshold > 0;
+        $volFilterEnabled = $volPeriod > 0 && $volThreshold > 0;
+        $startIndex = max($lookback, $trendFilterEnabled ? $trendMaPeriod : 0, $volFilterEnabled ? $volPeriod : 0);
+
         $equity = 0;
         $maxEquity = 0;
         $maxDrawdown = 0;
 
-        for ($i = $lookback; $i < count($prices); $i++) {
+        for ($i = $startIndex; $i < count($prices); $i++) {
             $currentPrice = $prices[$i]['price'];
             $currentTime = $prices[$i]['recorded_at'];
 
@@ -243,15 +556,43 @@ class BacktestHighLowBreakout extends Command
             $this->updateTrailingStop($currentPrice, $trailingOffset);
             $this->checkTrailingStop($currentPrice, $currentTime);
 
-            // 3. ブレイクアウト判定
+            // 3. トレンド判定
+            $trend = 'range';
+            if ($trendFilterEnabled) {
+                $maPrices = array_column(array_slice($prices, $i - $trendMaPeriod, $trendMaPeriod), 'price');
+                $ma = array_sum($maPrices) / $trendMaPeriod;
+                $deviation = ($currentPrice - $ma) / $ma * 100;
+
+                if ($deviation > $trendThreshold) {
+                    $trend = 'up';
+                } elseif ($deviation < -$trendThreshold) {
+                    $trend = 'down';
+                }
+            }
+
+            // 4. ボラティリティフィルター
+            $isVolatile = true;
+            if ($volFilterEnabled) {
+                $volPrices = array_column(array_slice($prices, $i - $volPeriod, $volPeriod), 'price');
+                $volHigh = max($volPrices);
+                $volLow = min($volPrices);
+                $volAvg = array_sum($volPrices) / $volPeriod;
+                $volatility = ($volHigh - $volLow) / $volAvg * 100;
+                $isVolatile = $volatility >= $volThreshold;
+            }
+
+            // 5. ブレイクアウト判定
             $thresholdMultiplier = $threshold / 100;
             $isHighBreakout = $currentPrice > $recentHigh * (1 + $thresholdMultiplier);
             $isLowBreakdown = $currentPrice < $recentLow * (1 - $thresholdMultiplier);
 
-            // 4. シグナル処理
-            if ($isHighBreakout) {
+            // 6. シグナル処理（トレンドフィルター＋ボラティリティフィルター適用）
+            $trendBlocksBuy = $trendFilterEnabled && $trend === 'down';
+            $trendBlocksShort = $trendFilterEnabled && $trend === 'up';
+
+            if ($isHighBreakout && !$trendBlocksBuy && $isVolatile) {
                 $this->processHighBreakout($currentPrice, $currentTime, $maxPositions, $stopLoss, $initialTrailing);
-            } elseif ($isLowBreakdown) {
+            } elseif ($isLowBreakdown && !$trendBlocksShort && $isVolatile) {
                 $this->processLowBreakdown($currentPrice, $currentTime, $maxPositions, $stopLoss, $initialTrailing);
             }
 

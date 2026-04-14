@@ -25,6 +25,8 @@ class HighLowBreakoutStrategy extends TradingStrategy
         $trendFilterEnabled = $params['trend_filter_enabled'] ?? true;
         $trendMaPeriod = $params['trend_ma_period'] ?? 60;
         $trendThreshold = $params['trend_threshold'] ?? 0.3;
+        $volPeriod = $params['vol_period'] ?? 0;
+        $volThreshold = $params['vol_threshold'] ?? 0;
 
         $prices = $marketData['prices'];
         $symbol = $marketData['symbol'];
@@ -88,6 +90,18 @@ class HighLowBreakoutStrategy extends TradingStrategy
         // トレンド判定
         $trend = $trendFilterEnabled ? $this->detectTrend($prices, $trendMaPeriod, $trendThreshold) : 'range';
 
+        // ボラティリティフィルター
+        $volatility = null;
+        $isVolatile = true;
+        if ($volPeriod > 0 && $volThreshold > 0 && count($prices) >= $volPeriod) {
+            $volPrices = array_slice($prices, -$volPeriod);
+            $volHigh = max($volPrices);
+            $volLow = min($volPrices);
+            $volAvg = array_sum($volPrices) / count($volPrices);
+            $volatility = ($volHigh - $volLow) / $volAvg * 100;
+            $isVolatile = $volatility >= $volThreshold;
+        }
+
         Log::info('High-Low Breakout Analysis', [
             'symbol' => $symbol,
             'current_price' => $currentPrice,
@@ -98,7 +112,25 @@ class HighLowBreakoutStrategy extends TradingStrategy
             'lookback_period' => $lookbackPeriod,
             'trend' => $trend,
             'trend_filter_enabled' => $trendFilterEnabled,
+            'volatility' => $volatility !== null ? round($volatility, 3) . '%' : 'OFF',
+            'is_volatile' => $isVolatile,
         ]);
+
+        // ボラティリティが低い場合はエントリーしない
+        if (!$isVolatile) {
+            Log::info('Entry skipped - Low volatility (range market)', [
+                'symbol' => $symbol,
+                'volatility' => round($volatility, 3) . '%',
+                'vol_threshold' => $volThreshold . '%',
+                'vol_period' => $volPeriod,
+            ]);
+
+            return [
+                'action' => 'hold',
+                'quantity' => 0,
+                'price' => null,
+            ];
+        }
 
         // 高値ブレイクアウト → 買いシグナル（下落トレンド時はスキップ）
         if ($currentPrice > $buyThreshold) {
