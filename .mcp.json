@@ -1,5 +1,14 @@
 {
   "mcpServers": {
+    "gmo-coin": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["/Users/kuraikazumaru/work/systrading/mcp-gmo-coin/dist/index.js"],
+      "env": {
+        "GMO_API_KEY": "",
+        "GMO_API_SECRET": ""
+      }
+    },
     "serena": {
       "type": "stdio",
       "command": "uvx",
