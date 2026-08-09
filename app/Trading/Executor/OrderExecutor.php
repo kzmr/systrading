@@ -21,6 +21,9 @@ class OrderExecutor
     private ExchangeClient $exchangeClient;
     private TradingStrategy $strategy;
 
+    /** ポジション所有戦略のパラメータキャッシュ (settings_id => parameters配列|null) */
+    private array $settingsParamCache = [];
+
     public function __construct(ExchangeClient $exchangeClient, TradingStrategy $strategy)
     {
         $this->exchangeClient = $exchangeClient;
@@ -33,6 +36,36 @@ class OrderExecutor
     private function getParam(string $key, mixed $default = null): mixed
     {
         $params = $this->strategy->getParameters();
+        return $params[$key] ?? $default;
+    }
+
+    /**
+     * ポジションを作成した戦略のパラメータを取得
+     *
+     * 共通リスク管理（損切り・トレーリングストップ）は全ポジションに適用するが、
+     * 適用する値は各ポジションを作成した戦略の設定に従う。
+     * 実行中の戦略の値を他戦略のポジションに適用すると、意図より厳しい/緩い
+     * 損切り・トレーリングが適用されてしまうため。
+     */
+    private function getParamForPosition(Position $position, string $key, mixed $default = null): mixed
+    {
+        // 戦略が紐づかない古いポジションは実行中戦略の設定にフォールバック
+        if (!$position->trading_settings_id) {
+            return $this->getParam($key, $default);
+        }
+
+        if (!array_key_exists($position->trading_settings_id, $this->settingsParamCache)) {
+            $settings = TradingSettings::find($position->trading_settings_id);
+            $this->settingsParamCache[$position->trading_settings_id] = $settings->parameters ?? null;
+        }
+
+        $params = $this->settingsParamCache[$position->trading_settings_id];
+
+        // 設定が見つからない/パラメータが不正な場合は実行中戦略の設定にフォールバック
+        if (!is_array($params)) {
+            return $this->getParam($key, $default);
+        }
+
         return $params[$key] ?? $default;
     }
 
@@ -123,6 +156,7 @@ class OrderExecutor
             $shortPositions = Position::where('symbol', $symbol)
                 ->where('side', 'short')
                 ->where('status', 'open')
+                ->where('trading_settings_id', $this->strategy->getSettingsId())
                 ->orderBy('opened_at', 'asc')
                 ->get();
 
@@ -178,6 +212,7 @@ class OrderExecutor
             $longCount = Position::where('symbol', $symbol)
                 ->where('side', 'long')
                 ->where('status', 'open')
+                ->where('trading_settings_id', $this->strategy->getSettingsId())
                 ->count();
 
             // 上限チェック（DBから取得、デフォルト3）
@@ -276,6 +311,7 @@ class OrderExecutor
                 $position = Position::where('symbol', $symbol)
                     ->where('side', 'long')
                     ->where('status', 'open')
+                    ->where('trading_settings_id', $this->strategy->getSettingsId())
                     ->orderBy('opened_at', 'desc')
                     ->first();
 
@@ -299,6 +335,7 @@ class OrderExecutor
             $longPositions = Position::where('symbol', $symbol)
                 ->where('side', 'long')
                 ->where('status', 'open')
+                ->where('trading_settings_id', $this->strategy->getSettingsId())
                 ->orderBy('opened_at', 'asc')
                 ->get();
 
@@ -354,6 +391,7 @@ class OrderExecutor
             $shortCount = Position::where('symbol', $symbol)
                 ->where('side', 'short')
                 ->where('status', 'open')
+                ->where('trading_settings_id', $this->strategy->getSettingsId())
                 ->count();
 
             // 上限チェック（DBから取得、デフォルト3）
@@ -619,9 +657,6 @@ class OrderExecutor
      */
     private function checkStopLoss(string $symbol, float $currentPrice): void
     {
-        $stopLossPercent = (float) $this->getParam('stop_loss_percent', 1.0);
-        $stopLossPercentage = $stopLossPercent / 100; // パーセントを小数に変換
-
         // ロングポジションの損切りチェック
         $longPositions = Position::where('symbol', $symbol)
             ->where('side', 'long')
@@ -629,6 +664,8 @@ class OrderExecutor
             ->get();
 
         foreach ($longPositions as $position) {
+            // 損切り%はポジションを作成した戦略の設定に従う
+            $stopLossPercentage = (float) $this->getParamForPosition($position, 'stop_loss_percent', 1.0) / 100;
             $stopLossPrice = $position->entry_price * (1 - $stopLossPercentage);
 
             if ($currentPrice <= $stopLossPrice) {
@@ -678,7 +715,7 @@ class OrderExecutor
                         $sellResult['price'],
                         $position->quantity,
                         $profitLoss,
-                        '損切り実行 - 1%ストップロス到達',
+                        sprintf('損切り実行 - %.2f%%ストップロス到達', $stopLossPercentage * 100),
                         $this->getPositionStrategyName($position)
                     );
                 }
@@ -692,6 +729,8 @@ class OrderExecutor
             ->get();
 
         foreach ($shortPositions as $position) {
+            // 損切り%はポジションを作成した戦略の設定に従う
+            $stopLossPercentage = (float) $this->getParamForPosition($position, 'stop_loss_percent', 1.0) / 100;
             $stopLossPrice = $position->entry_price * (1 + $stopLossPercentage);
 
             if ($currentPrice >= $stopLossPrice) {
@@ -742,7 +781,7 @@ class OrderExecutor
                         $buyResult['price'],
                         $position->quantity,
                         $profitLoss,
-                        '損切り実行 - 1%ストップロス到達',
+                        sprintf('損切り実行 - %.2f%%ストップロス到達', $stopLossPercentage * 100),
                         $this->getPositionStrategyName($position)
                     );
                 }
@@ -846,7 +885,8 @@ class OrderExecutor
      */
     private function calculateExitPrice(Position $position, float $trailingStopPrice): float
     {
-        $stopLossPercent = (float) $this->getParam('stop_loss_percent', 1.0);
+        // 損切り%はポジションを作成した戦略の設定に従う
+        $stopLossPercent = (float) $this->getParamForPosition($position, 'stop_loss_percent', 1.0);
 
         if ($position->side === 'long') {
             // ロング: 損切り価格 = エントリー価格 × (1 - 損切り%)
@@ -1141,9 +1181,6 @@ class OrderExecutor
      */
     private function updateTrailingStop(string $symbol, float $currentPrice): void
     {
-        $trailingOffsetPercent = (float) $this->getParam('trailing_stop_offset_percent', 0.5);
-        $trailingOffset = $trailingOffsetPercent / 100; // パーセントを小数に変換
-
         // ロングポジションのトレーリングストップ更新
         $longPositions = Position::where('symbol', $symbol)
             ->where('side', 'long')
@@ -1151,12 +1188,15 @@ class OrderExecutor
             ->get();
 
         foreach ($longPositions as $position) {
-            // トレーリングストップ = 現在価格 - 0.5%（利益方向のみ追跡）
+            // トレーリング幅はポジションを作成した戦略の設定に従う
+            $trailingOffset = (float) $this->getParamForPosition($position, 'trailing_stop_offset_percent', 0.5) / 100;
+
+            // トレーリングストップ = 現在価格 - オフセット%（利益方向のみ追跡）
             $newTrailingStop = $currentPrice * (1 - $trailingOffset);
 
             // 既存ポジション（trailing_stop_priceがnull）の場合は初期値を設定
             if ($position->trailing_stop_price === null) {
-                $initialTrailingPercent = (float) $this->getParam('initial_trailing_stop_percent', 0.7);
+                $initialTrailingPercent = (float) $this->getParamForPosition($position, 'initial_trailing_stop_percent', 0.7);
                 $initialStop = $position->entry_price * (1 - $initialTrailingPercent / 100);
 
                 $position->update([
@@ -1210,12 +1250,15 @@ class OrderExecutor
             ->get();
 
         foreach ($shortPositions as $position) {
-            // トレーリングストップ = 現在価格 + 0.5%（利益方向のみ追跡）
+            // トレーリング幅はポジションを作成した戦略の設定に従う
+            $trailingOffset = (float) $this->getParamForPosition($position, 'trailing_stop_offset_percent', 0.5) / 100;
+
+            // トレーリングストップ = 現在価格 + オフセット%（利益方向のみ追跡）
             $newTrailingStop = $currentPrice * (1 + $trailingOffset);
 
             // 既存ポジション（trailing_stop_priceがnull）の場合は初期値を設定
             if ($position->trailing_stop_price === null) {
-                $initialTrailingPercent = (float) $this->getParam('initial_trailing_stop_percent', 0.7);
+                $initialTrailingPercent = (float) $this->getParamForPosition($position, 'initial_trailing_stop_percent', 0.7);
                 $initialStop = $position->entry_price * (1 + $initialTrailingPercent / 100);
 
                 $position->update([
