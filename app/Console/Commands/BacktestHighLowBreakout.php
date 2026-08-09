@@ -61,6 +61,8 @@ class BacktestHighLowBreakout extends Command
         $maxPositions = (int) $this->option('max-positions');
         $trendMaPeriod = (int) $this->option('trend-ma-period');
         $trendThreshold = (float) $this->option('trend-threshold');
+        $volPeriod = (int) $this->option('vol-period');
+        $volThreshold = (float) $this->option('vol-threshold');
 
         $this->info("\n=== HighLowBreakout Strategy Backtest ===");
         $this->info("Symbol: {$symbol}");
@@ -72,6 +74,8 @@ class BacktestHighLowBreakout extends Command
         $this->info("Max Positions: {$maxPositions}");
         $this->info("Trend MA Period: {$trendMaPeriod}");
         $this->info("Trend Threshold: {$trendThreshold}%");
+        $this->info("Vol Period: {$volPeriod}");
+        $this->info("Vol Threshold: {$volThreshold}%");
 
         $prices = $this->loadPriceHistory($symbol);
 
@@ -83,7 +87,7 @@ class BacktestHighLowBreakout extends Command
         $this->info("Price data: " . count($prices) . " records");
         $this->info("Period: " . $prices[0]['recorded_at'] . " to " . end($prices)['recorded_at']);
 
-        $result = $this->simulate($prices, $threshold, $lookback, $stopLoss, $initialTrailing, $trailingOffset, $maxPositions, $trendMaPeriod, $trendThreshold);
+        $result = $this->simulate($prices, $threshold, $lookback, $stopLoss, $initialTrailing, $trailingOffset, $maxPositions, $trendMaPeriod, $trendThreshold, $volPeriod, $volThreshold);
 
         $this->displayResults($result);
 
