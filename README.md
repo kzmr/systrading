@@ -197,6 +197,9 @@ TRAILING_STOP_OFFSET_PERCENT=0.5   # 最適化済み
 # 自動トレーディング開始（1分ごとに実行）
 php artisan schedule:work
 
+# ポジション高頻度監視（15秒ごと・トレーリングストップ更新）
+nohup php artisan trading:monitor --interval=15 >> storage/logs/monitor.log 2>&1 &
+
 # 別ターミナルで現在のポジション確認
 ./show_current_positions.sh
 ```
@@ -205,6 +208,7 @@ php artisan schedule:work
 
 ```bash
 pkill -f schedule:work
+kill $(pgrep -f "trading:monitor")
 ```
 
 ---
@@ -292,6 +296,82 @@ php artisan config:clear
 
 ---
 
+## 🤖 GMO Coin MCP Server
+
+Claude Code（AI）がGMO Coin APIに直接アクセスし、市場データの取得・分析・トレード判断を行うためのMCPサーバー。
+
+### セットアップ
+
+```bash
+cd mcp-gmo-coin
+npm install
+npm run build
+```
+
+### 提供ツール
+
+**Public API（認証不要）:**
+
+| ツール | 用途 |
+|--------|------|
+| `get_ticker` | ティッカー情報（価格・bid/ask・出来高） |
+| `get_klines` | ローソク足データ（1min〜1month） |
+| `get_orderbooks` | 板情報（売買の厚み） |
+| `get_trades` | 直近約定履歴 |
+| `get_exchange_status` | 取引所ステータス |
+| `get_symbols` | 取扱銘柄一覧 |
+
+**Private API（要API Key）:**
+
+| ツール | 用途 |
+|--------|------|
+| `get_account_assets` | 口座残高 |
+| `get_active_orders` | 未約定注文一覧 |
+| `get_latest_executions` | 自分の約定履歴 |
+| `place_order` | 注文発注（MARKET/LIMIT/STOP） |
+| `cancel_order` | 注文キャンセル |
+
+### Claude Code設定
+
+`.mcp.json` にサーバーを登録済み。Private APIを使う場合は環境変数にAPIキーを設定：
+
+```json
+{
+  "env": {
+    "GMO_API_KEY": "your_api_key",
+    "GMO_API_SECRET": "your_api_secret"
+  }
+}
+```
+
+---
+
+## ⏱️ ポジションモニター
+
+`trading:monitor` コマンドにより、オープンポジションを15〜30秒間隔で高頻度監視。`trading:execute`（1分間隔）と並行稼働し、急な価格変動への反応速度を向上。
+
+### 監視内容
+
+- **トレーリングストップ更新**: 価格が有利に動いた場合、STOP注文を即座に更新
+- **STOP注文約定チェック**: 決済注文の約定を検知してポジションをクローズ
+- **緊急決済**: 価格がSTOP注文から0.5%以上乖離した場合、成行で即決済
+- **フォールバック決済**: STOP注文がないポジションの成行決済
+
+### 使い方
+
+```bash
+# 15秒間隔（デフォルト）
+php artisan trading:monitor
+
+# 30秒間隔
+php artisan trading:monitor --interval=30
+
+# バックグラウンド実行
+nohup php artisan trading:monitor --interval=15 >> storage/logs/monitor.log 2>&1 &
+```
+
+---
+
 ## 🔐 セキュリティ
 
 ### APIキー管理
@@ -317,32 +397,45 @@ php artisan config:clear
 systrading/
 ├── app/
 │   ├── Console/Commands/
-│   │   ├── TradingExecute.php          # メイン実行コマンド
-│   │   ├── RecordPriceHistory.php      # 価格履歴記録
-│   │   └── BacktestStrategy.php        # バックテスト
+│   │   ├── TradingExecute.php              # メイン実行コマンド（1分間隔）
+│   │   ├── MonitorPositions.php            # ポジション高頻度監視（15秒間隔）
+│   │   ├── BacktestHighLowBreakout.php     # バックテスト・パラメータ最適化
+│   │   └── RecordPriceHistory.php          # 価格履歴記録
 │   ├── Models/
-│   │   ├── Position.php                # ポジションモデル
-│   │   ├── TradingLog.php              # 取引ログ
-│   │   └── PriceHistory.php            # 価格履歴
+│   │   ├── Position.php                    # ポジションモデル
+│   │   ├── TradingSettings.php             # 戦略設定モデル
+│   │   ├── TradingLog.php                  # 取引ログ
+│   │   └── PriceHistory.php                # 価格履歴
 │   └── Trading/
 │       ├── Strategy/
-│       │   ├── TradingStrategy.php     # 戦略基底クラス
-│       │   └── HighLowBreakoutStrategy.php  # 実装戦略
+│       │   ├── TradingStrategy.php         # 戦略基底クラス
+│       │   ├── HighLowBreakoutStrategy.php # ブレイクアウト戦略
+│       │   └── RSIContrarianStrategy.php   # RSI逆張り戦略
 │       ├── Exchange/
-│       │   ├── ExchangeClient.php      # インターフェース
-│       │   ├── PaperTradingClient.php  # ペーパートレード
-│       │   ├── GMOCoinClient.php       # GMOコイン
-│       │   └── LiveTradingClient.php   # Binance
-│       └── Executor/
-│           └── OrderExecutor.php       # 注文実行・リスク管理
+│       │   ├── ExchangeClient.php          # インターフェース
+│       │   ├── PaperTradingClient.php      # ペーパートレード
+│       │   ├── GMOCoinClient.php           # GMOコイン
+│       │   └── LiveTradingClient.php       # Binance
+│       ├── Executor/
+│       │   └── OrderExecutor.php           # 注文実行・リスク管理
+│       └── Monitor/
+│           └── PositionMonitor.php         # ポジション監視ロジック
+├── mcp-gmo-coin/                           # GMO Coin MCP Server
+│   ├── src/
+│   │   ├── index.ts                        # MCP Serverエントリーポイント
+│   │   └── gmo-client.ts                   # GMO Coin APIクライアント
+│   ├── package.json
+│   └── tsconfig.json
 ├── config/
-│   └── trading.php                     # トレーディング設定
+│   └── trading.php                         # トレーディング設定
 ├── database/
-│   ├── migrations/                     # マイグレーション
-│   └── database.sqlite                 # SQLiteデータベース
-├── TRADING_STRATEGY.md                 # 戦略ドキュメント
-├── BACKTEST_COMPARISON.md              # バックテスト比較
-└── show_current_positions.sh           # ポジション確認スクリプト
+│   ├── migrations/                         # マイグレーション
+│   └── database.sqlite                     # SQLiteデータベース
+├── tests/Feature/
+│   ├── PositionMonitorTest.php             # ポジション監視テスト（26件）
+│   ├── LimitOrderTrailingStopTest.php      # STOP注文テスト
+│   └── OrderExecutorFeeTest.php            # 手数料テスト
+└── show_current_positions.sh               # ポジション確認スクリプト
 ```
 
 ---

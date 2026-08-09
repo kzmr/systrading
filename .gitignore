@@ -35,3 +35,7 @@ composer.phar
 # CSV exports
 *.csv
 .serena/
+
+# MCP Server
+mcp-gmo-coin/node_modules/
+mcp-gmo-coin/dist/
