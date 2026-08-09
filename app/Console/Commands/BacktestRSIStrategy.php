@@ -16,6 +16,8 @@ class BacktestRSIStrategy extends Command
         {--rsi-exit-short=50 : RSI threshold to exit short positions}
         {--max-hold=60 : Maximum hold time in minutes}
         {--stop-loss=1.0 : Stop loss percentage}
+        {--initial-trailing=0 : Initial trailing stop percentage (0=disabled)}
+        {--trailing-offset=0 : Trailing stop offset percentage (0=disabled)}
         {--optimize : Run parameter optimization}
         {--csv= : Path to CSV file for price data}';
 
@@ -40,6 +42,8 @@ class BacktestRSIStrategy extends Command
         $rsiExitShort = (float) $this->option('rsi-exit-short');
         $maxHold = (int) $this->option('max-hold');
         $stopLoss = (float) $this->option('stop-loss');
+        $initialTrailing = (float) $this->option('initial-trailing');
+        $trailingOffset = (float) $this->option('trailing-offset');
 
         $this->info("\n=== RSI Contrarian Strategy Backtest ===");
         $this->info("Symbol: {$symbol}");
@@ -50,9 +54,11 @@ class BacktestRSIStrategy extends Command
         $this->info("RSI Exit Short: {$rsiExitShort}");
         $this->info("Max Hold: {$maxHold} minutes");
         $this->info("Stop Loss: {$stopLoss}%");
+        $this->info("Initial Trailing Stop: " . ($initialTrailing > 0 ? "{$initialTrailing}%" : 'OFF'));
+        $this->info("Trailing Offset: " . ($trailingOffset > 0 ? "{$trailingOffset}%" : 'OFF'));
 
         $prices = $this->loadPriceHistory($symbol);
-        $result = $this->simulate($prices, $rsiPeriod, $rsiOversold, $rsiOverbought, $rsiExitLong, $rsiExitShort, $maxHold, $stopLoss);
+        $result = $this->simulate($prices, $rsiPeriod, $rsiOversold, $rsiOverbought, $rsiExitLong, $rsiExitShort, $maxHold, $stopLoss, $initialTrailing, $trailingOffset);
 
         $this->displayResults($result);
 
@@ -74,6 +80,12 @@ class BacktestRSIStrategy extends Command
 
         $this->info("Price data loaded: " . count($prices) . " records");
         $this->info("Period: " . $prices[0]['recorded_at'] . " to " . end($prices)['recorded_at']);
+
+        // トレーリングストップはCLIで指定した値を固定して最適化する
+        $optInitialTrailing = (float) $this->option('initial-trailing');
+        $optTrailingOffset = (float) $this->option('trailing-offset');
+        $this->info("Initial Trailing Stop: " . ($optInitialTrailing > 0 ? "{$optInitialTrailing}%" : 'OFF'));
+        $this->info("Trailing Offset: " . ($optTrailingOffset > 0 ? "{$optTrailingOffset}%" : 'OFF'));
 
         // パラメータ範囲
         $rsiPeriods = [14, 20, 30, 40, 60];
@@ -102,7 +114,8 @@ class BacktestRSIStrategy extends Command
                                 foreach ($stopLossValues as $stopLoss) {
                                     $result = $this->simulate(
                                         $prices, $rsiPeriod, $oversold, $overbought,
-                                        $exitLong, $exitShort, $maxHold, $stopLoss
+                                        $exitLong, $exitShort, $maxHold, $stopLoss,
+                                        $optInitialTrailing, $optTrailingOffset
                                     );
 
                                     if ($result['total_trades'] >= 10) {
@@ -219,7 +232,9 @@ class BacktestRSIStrategy extends Command
         float $rsiExitLong,
         float $rsiExitShort,
         int $maxHold,
-        float $stopLoss
+        float $stopLoss,
+        float $initialTrailing = 0.0,
+        float $trailingOffset = 0.0
     ): array {
         $trades = [];
         $position = null;
@@ -229,6 +244,10 @@ class BacktestRSIStrategy extends Command
 
         // 手数料（片道0.05%のTaker想定、指値なら-0.01%だが保守的に）
         $feeRate = 0.0005;
+
+        // トレーリングストップの有効判定
+        // 本番(OrderExecutor)ではトレーリングと損切りのうち保護的な方が決済価格になる
+        $trailingEnabled = $initialTrailing > 0 && $trailingOffset > 0;
 
         for ($i = $rsiPeriod + 1; $i < count($prices); $i++) {
             $currentPrice = $prices[$i]['price'];
@@ -248,11 +267,25 @@ class BacktestRSIStrategy extends Command
                 $exitReason = '';
 
                 if ($position['side'] === 'long') {
-                    // 損切りチェック
+                    // トレーリングストップ更新（利益方向のみ追跡）
+                    if ($trailingEnabled) {
+                        $newTrailingStop = $currentPrice * (1 - $trailingOffset / 100);
+                        if ($newTrailingStop > $position['trailing_stop']) {
+                            $position['trailing_stop'] = $newTrailingStop;
+                        }
+                    }
+
+                    // 決済価格 = トレーリングと損切りのうち保護的な方（本番の calculateExitPrice と同じ）
                     $stopLossPrice = $position['entry_price'] * (1 - $stopLoss / 100);
-                    if ($currentPrice <= $stopLossPrice) {
+                    $exitLevel = $trailingEnabled
+                        ? max($position['trailing_stop'], $stopLossPrice)
+                        : $stopLossPrice;
+
+                    if ($currentPrice <= $exitLevel) {
                         $shouldClose = true;
-                        $exitReason = 'stop_loss';
+                        $exitReason = ($trailingEnabled && $position['trailing_stop'] >= $stopLossPrice)
+                            ? 'trailing_stop'
+                            : 'stop_loss';
                     }
                     // RSI利確チェック
                     elseif ($rsi >= $rsiExitLong) {
@@ -283,10 +316,25 @@ class BacktestRSIStrategy extends Command
                         $position = null;
                     }
                 } else { // short
+                    // トレーリングストップ更新（利益方向のみ追跡）
+                    if ($trailingEnabled) {
+                        $newTrailingStop = $currentPrice * (1 + $trailingOffset / 100);
+                        if ($newTrailingStop < $position['trailing_stop']) {
+                            $position['trailing_stop'] = $newTrailingStop;
+                        }
+                    }
+
+                    // 決済価格 = トレーリングと損切りのうち保護的な方（本番の calculateExitPrice と同じ）
                     $stopLossPrice = $position['entry_price'] * (1 + $stopLoss / 100);
-                    if ($currentPrice >= $stopLossPrice) {
+                    $exitLevel = $trailingEnabled
+                        ? min($position['trailing_stop'], $stopLossPrice)
+                        : $stopLossPrice;
+
+                    if ($currentPrice >= $exitLevel) {
                         $shouldClose = true;
-                        $exitReason = 'stop_loss';
+                        $exitReason = ($trailingEnabled && $position['trailing_stop'] <= $stopLossPrice)
+                            ? 'trailing_stop'
+                            : 'stop_loss';
                     }
                     elseif ($rsi <= $rsiExitShort) {
                         $shouldClose = true;
@@ -325,6 +373,9 @@ class BacktestRSIStrategy extends Command
                         'side' => 'long',
                         'entry_price' => $currentPrice,
                         'entry_time' => $timestamp,
+                        'trailing_stop' => $trailingEnabled
+                            ? $currentPrice * (1 - $initialTrailing / 100)
+                            : null,
                     ];
                 } elseif ($rsi > $rsiOverbought) {
                     // 買われすぎ → ショートエントリー
@@ -332,6 +383,9 @@ class BacktestRSIStrategy extends Command
                         'side' => 'short',
                         'entry_price' => $currentPrice,
                         'entry_time' => $timestamp,
+                        'trailing_stop' => $trailingEnabled
+                            ? $currentPrice * (1 + $initialTrailing / 100)
+                            : null,
                     ];
                 }
             }
