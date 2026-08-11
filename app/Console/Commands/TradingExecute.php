@@ -4,9 +4,7 @@ namespace App\Console\Commands;
 
 use App\Models\TradingSettings;
 use App\Trading\Exchange\ExchangeClient;
-use App\Trading\Exchange\GMOCoinClient;
-use App\Trading\Exchange\LiveTradingClient;
-use App\Trading\Exchange\PaperTradingClient;
+use App\Trading\Exchange\ExchangeClientFactory;
 use App\Trading\Executor\OrderExecutor;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\Log;
@@ -97,21 +95,12 @@ class TradingExecute extends Command
      */
     private function getExchangeClient(): ExchangeClient
     {
-        $mode = config('trading.mode', 'paper');
-        $exchangeName = config('trading.exchange.name', 'gmo');
-
-        if ($mode === 'live') {
+        if (ExchangeClientFactory::isLiveMode()) {
             $this->warn('⚠ ライブトレーディングモードで実行中');
-
-            // 取引所名に基づいてクライアントを選択
-            return match ($exchangeName) {
-                'gmo' => new GMOCoinClient(),
-                'binance' => new LiveTradingClient(),
-                default => throw new \Exception("未対応の取引所: {$exchangeName}"),
-            };
+        } else {
+            $this->info('📝 ペーパートレーディングモードで実行中');
         }
 
-        $this->info('📝 ペーパートレーディングモードで実行中');
-        return new PaperTradingClient();
+        return ExchangeClientFactory::make();
     }
 }
