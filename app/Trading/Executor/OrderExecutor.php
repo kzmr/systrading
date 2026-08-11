@@ -3,7 +3,6 @@
 namespace App\Trading\Executor;
 
 use App\Models\Position;
-use App\Models\PriceHistory;
 use App\Models\TradingLog;
 use App\Models\TradingSettings;
 use App\Trading\Exchange\ExchangeClient;
@@ -80,14 +79,10 @@ class OrderExecutor
         try {
             // 1. 市場データを取得
             $marketData = $this->exchangeClient->getMarketData($symbol);
-
-            // 現在価格を記録（バックテスト用）
             $currentPrice = end($marketData['prices']);
-            PriceHistory::create([
-                'symbol' => $symbol,
-                'price' => $currentPrice,
-                'recorded_at' => now(),
-            ]);
+
+            // 価格履歴の記録は price:record コマンドが担当する
+            // （戦略の稼働状況に依存せずデータを収集するため）
 
             // 2. 決済指値注文の約定チェック（最優先）
             $this->checkExitOrderExecution($symbol);
