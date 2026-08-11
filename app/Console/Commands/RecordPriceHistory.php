@@ -49,11 +49,15 @@ class RecordPriceHistory extends Command
             try {
                 $price = $client->getCurrentPrice($symbol);
 
-                PriceHistory::create([
-                    'symbol' => $symbol,
-                    'price' => $price,
-                    'recorded_at' => now(),
-                ]);
+                // (symbol, recorded_at) にユニーク制約があるため、
+                // 同一時刻の再実行では重複を作らず既存レコードを更新する
+                PriceHistory::updateOrCreate(
+                    [
+                        'symbol' => $symbol,
+                        'recorded_at' => now()->startOfMinute(),
+                    ],
+                    ['price' => $price]
+                );
 
                 $recorded++;
                 $this->line("{$symbol}: {$price}");
