@@ -18,6 +18,9 @@ class BacktestRSIStrategy extends Command
         {--stop-loss=1.0 : Stop loss percentage}
         {--initial-trailing=0 : Initial trailing stop percentage (0=disabled)}
         {--trailing-offset=0 : Trailing stop offset percentage (0=disabled)}
+        {--trend-ma-period=0 : Trend filter MA period (0=disabled)}
+        {--trend-threshold=0.3 : Trend filter deviation threshold percentage}
+        {--cooldown=0 : Cooldown minutes after a losing trade (0=disabled)}
         {--optimize : Run parameter optimization}
         {--csv= : Path to CSV file for price data}';
 
@@ -44,6 +47,9 @@ class BacktestRSIStrategy extends Command
         $stopLoss = (float) $this->option('stop-loss');
         $initialTrailing = (float) $this->option('initial-trailing');
         $trailingOffset = (float) $this->option('trailing-offset');
+        $trendMaPeriod = (int) $this->option('trend-ma-period');
+        $trendThreshold = (float) $this->option('trend-threshold');
+        $cooldownMinutes = (int) $this->option('cooldown');
 
         $this->info("\n=== RSI Contrarian Strategy Backtest ===");
         $this->info("Symbol: {$symbol}");
@@ -56,9 +62,11 @@ class BacktestRSIStrategy extends Command
         $this->info("Stop Loss: {$stopLoss}%");
         $this->info("Initial Trailing Stop: " . ($initialTrailing > 0 ? "{$initialTrailing}%" : 'OFF'));
         $this->info("Trailing Offset: " . ($trailingOffset > 0 ? "{$trailingOffset}%" : 'OFF'));
+        $this->info("Trend Filter: " . ($trendMaPeriod > 0 ? "MA{$trendMaPeriod} / {$trendThreshold}%" : 'OFF'));
+        $this->info("Cooldown: " . ($cooldownMinutes > 0 ? "{$cooldownMinutes} minutes" : 'OFF'));
 
         $prices = $this->loadPriceHistory($symbol);
-        $result = $this->simulate($prices, $rsiPeriod, $rsiOversold, $rsiOverbought, $rsiExitLong, $rsiExitShort, $maxHold, $stopLoss, $initialTrailing, $trailingOffset);
+        $result = $this->simulate($prices, $rsiPeriod, $rsiOversold, $rsiOverbought, $rsiExitLong, $rsiExitShort, $maxHold, $stopLoss, $initialTrailing, $trailingOffset, $trendMaPeriod, $trendThreshold, $cooldownMinutes);
 
         $this->displayResults($result);
 
@@ -86,6 +94,11 @@ class BacktestRSIStrategy extends Command
         $optTrailingOffset = (float) $this->option('trailing-offset');
         $this->info("Initial Trailing Stop: " . ($optInitialTrailing > 0 ? "{$optInitialTrailing}%" : 'OFF'));
         $this->info("Trailing Offset: " . ($optTrailingOffset > 0 ? "{$optTrailingOffset}%" : 'OFF'));
+        $optTrendMaPeriod = (int) $this->option('trend-ma-period');
+        $optTrendThreshold = (float) $this->option('trend-threshold');
+        $this->info("Trend Filter: " . ($optTrendMaPeriod > 0 ? "MA{$optTrendMaPeriod} / {$optTrendThreshold}%" : 'OFF'));
+        $optCooldown = (int) $this->option('cooldown');
+        $this->info("Cooldown: " . ($optCooldown > 0 ? "{$optCooldown} minutes" : 'OFF'));
 
         // パラメータ範囲
         $rsiPeriods = [14, 20, 30, 40, 60];
@@ -115,7 +128,8 @@ class BacktestRSIStrategy extends Command
                                     $result = $this->simulate(
                                         $prices, $rsiPeriod, $oversold, $overbought,
                                         $exitLong, $exitShort, $maxHold, $stopLoss,
-                                        $optInitialTrailing, $optTrailingOffset
+                                        $optInitialTrailing, $optTrailingOffset,
+                                        $optTrendMaPeriod, $optTrendThreshold, $optCooldown
                                     );
 
                                     if ($result['total_trades'] >= 10) {
@@ -234,7 +248,10 @@ class BacktestRSIStrategy extends Command
         int $maxHold,
         float $stopLoss,
         float $initialTrailing = 0.0,
-        float $trailingOffset = 0.0
+        float $trailingOffset = 0.0,
+        int $trendMaPeriod = 0,
+        float $trendThreshold = 0.0,
+        int $cooldownMinutes = 0
     ): array {
         $trades = [];
         $position = null;
@@ -249,7 +266,23 @@ class BacktestRSIStrategy extends Command
         // 本番(OrderExecutor)ではトレーリングと損切りのうち保護的な方が決済価格になる
         $trailingEnabled = $initialTrailing > 0 && $trailingOffset > 0;
 
-        for ($i = $rsiPeriod + 1; $i < count($prices); $i++) {
+        // トレンドフィルターの有効判定
+        // 本番(RSIContrarianStrategy)は下落トレンド中の買いと上昇トレンド中の売りを禁止する
+        $trendFilterEnabled = $trendMaPeriod > 0 && $trendThreshold > 0;
+
+        // トレンド判定に必要な本数が揃うまで開始しない
+        $startIndex = max($rsiPeriod + 1, $trendFilterEnabled ? $trendMaPeriod - 1 : 0);
+
+        // クールダウンの有効判定
+        // 本番(RSIContrarianStrategy)は負けトレード後、一定時間エントリーを停止する
+        $cooldownEnabled = $cooldownMinutes > 0;
+        $lastLossAt = null;
+
+        // フィルターで見送ったシグナル数（効果の可視化用）
+        $skippedByTrend = 0;
+        $skippedByCooldown = 0;
+
+        for ($i = $startIndex; $i < count($prices); $i++) {
             $currentPrice = $prices[$i]['price'];
             $timestamp = $prices[$i]['recorded_at'];
 
@@ -304,6 +337,10 @@ class BacktestRSIStrategy extends Command
                         $pnl = $grossPnL - $fee;
                         $totalPnL += $pnl;
                         if ($pnl > 0) $wins++; else $losses++;
+                        // クールダウン判定用（本番は手数料控除前で負けを判定する）
+                        if ($grossPnL < 0) {
+                            $lastLossAt = strtotime($timestamp);
+                        }
                         $trades[] = [
                             'entry_time' => $position['entry_time'],
                             'exit_time' => $timestamp,
@@ -351,6 +388,10 @@ class BacktestRSIStrategy extends Command
                         $pnl = $grossPnL - $fee;
                         $totalPnL += $pnl;
                         if ($pnl > 0) $wins++; else $losses++;
+                        // クールダウン判定用（本番は手数料控除前で負けを判定する）
+                        if ($grossPnL < 0) {
+                            $lastLossAt = strtotime($timestamp);
+                        }
                         $trades[] = [
                             'entry_time' => $position['entry_time'],
                             'exit_time' => $timestamp,
@@ -367,7 +408,48 @@ class BacktestRSIStrategy extends Command
 
             // 新規エントリー判定（ポジションがない場合のみ）
             if (!$position) {
-                if ($rsi < $rsiOversold) {
+                // トレンド判定（本番 TradingStrategy::detectTrend と同一ロジック）
+                // 移動平均からの乖離率で up / down / range を判定する
+                $trend = 'range';
+                if ($trendFilterEnabled) {
+                    $maPrices = array_column(
+                        array_slice($prices, $i - $trendMaPeriod + 1, $trendMaPeriod),
+                        'price'
+                    );
+                    $ma = array_sum($maPrices) / count($maPrices);
+                    $deviation = ($currentPrice - $ma) / $ma * 100;
+
+                    if ($deviation > $trendThreshold) {
+                        $trend = 'up';
+                    } elseif ($deviation < -$trendThreshold) {
+                        $trend = 'down';
+                    }
+                }
+
+                $wantLong = $rsi < $rsiOversold;
+                $wantShort = $rsi > $rsiOverbought;
+
+                // 下落トレンド中の買い / 上昇トレンド中の売りは見送る
+                if ($wantLong && $trendFilterEnabled && $trend === 'down') {
+                    $wantLong = false;
+                    $skippedByTrend++;
+                }
+                if ($wantShort && $trendFilterEnabled && $trend === 'up') {
+                    $wantShort = false;
+                    $skippedByTrend++;
+                }
+
+                // クールダウン判定（本番 RSIContrarianStrategy::isInCooldown と同一）
+                // 直近の負けトレードから一定時間はエントリーしない
+                // 本番は手数料控除前の profit_loss で判定するため gross で比較する
+                if (($wantLong || $wantShort) && $cooldownEnabled && $lastLossAt !== null
+                    && (strtotime($timestamp) - $lastLossAt) < $cooldownMinutes * 60) {
+                    $wantLong = false;
+                    $wantShort = false;
+                    $skippedByCooldown++;
+                }
+
+                if ($wantLong) {
                     // 売られすぎ → ロングエントリー
                     $position = [
                         'side' => 'long',
@@ -377,7 +459,7 @@ class BacktestRSIStrategy extends Command
                             ? $currentPrice * (1 - $initialTrailing / 100)
                             : null,
                     ];
-                } elseif ($rsi > $rsiOverbought) {
+                } elseif ($wantShort) {
                     // 買われすぎ → ショートエントリー
                     $position = [
                         'side' => 'short',
@@ -432,6 +514,8 @@ class BacktestRSIStrategy extends Command
             'total_pnl' => $totalPnL,
             'avg_pnl' => $avgPnL,
             'profit_factor' => $profitFactor,
+            'skipped_by_trend' => $skippedByTrend,
+            'skipped_by_cooldown' => $skippedByCooldown,
         ];
     }
 
@@ -501,6 +585,14 @@ class BacktestRSIStrategy extends Command
         $this->info("Total trades: {$result['total_trades']}");
         $this->info("Wins: {$result['wins']}");
         $this->info("Losses: {$result['losses']}");
+
+        if (!empty($result['skipped_by_trend'])) {
+            $this->info("Skipped by trend filter: {$result['skipped_by_trend']}");
+        }
+
+        if (!empty($result['skipped_by_cooldown'])) {
+            $this->info("Skipped by cooldown: {$result['skipped_by_cooldown']}");
+        }
 
         if ($result['total_trades'] > 0) {
             $this->info(sprintf("Win rate: %.2f%%", $result['win_rate']));
