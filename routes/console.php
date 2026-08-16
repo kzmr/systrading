@@ -16,5 +16,9 @@ Schedule::command('price:record')->everyMinute()->withoutOverlapping();
 // 板は過去に遡って取得できないため、検証したくなる前から蓄積しておく
 Schedule::command('orderbook:record')->everyMinute()->withoutOverlapping();
 
+// 市場横断スナップショット(日本プレミアム・取引所間価格差)を1分ごとに記録
+// 為替の時間足履歴は60日分しか遡れないため、今から蓄積する必要がある
+Schedule::command('market:record')->everyMinute()->withoutOverlapping();
+
 // トレーディングコマンドを1分ごとに実行
 Schedule::command('trading:execute')->everyMinute();
