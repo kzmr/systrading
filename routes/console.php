@@ -29,3 +29,7 @@ Schedule::command('spx:record')
 
 // トレーディングコマンドを1分ごとに実行
 Schedule::command('trading:execute')->everyMinute();
+
+// 撤退基準の監視。条件を満たした戦略を自動停止する
+// 手動監視だと判断が先延ばしになるため機械的に執行する
+Schedule::command('strategy:guard')->everyFifteenMinutes()->withoutOverlapping();
