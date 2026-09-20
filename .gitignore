@@ -39,3 +39,6 @@ composer.phar
 # MCP Server
 mcp-gmo-coin/node_modules/
 mcp-gmo-coin/dist/
+
+# ローカル専用の引継メモ（本番サーバの接続情報を含むため公開しない）
+/HANDOFF.md
