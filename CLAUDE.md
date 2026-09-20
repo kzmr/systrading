@@ -23,8 +23,9 @@ Laravelベースの自動トレーディングシステムで、ペーパート�
 
 1. **Strategy Layer** (`app/Trading/Strategy/`)
    - `TradingStrategy.php`: 戦略の基底クラス
-   - `RSIContrarianStrategy.php`: RSI逆張り戦略（現在運用中）
-   - `HighLowBreakoutStrategy.php`: 高値安値ブレイクアウト戦略
+   - `SpxReversalStrategy.php`: 米国株急落後のBTC反発戦略（**現在運用中**）
+   - `RSIContrarianStrategy.php`: RSI逆張り戦略（停止中・優位性が確認できず）
+   - `HighLowBreakoutStrategy.php`: 高値安値ブレイクアウト戦略（停止中・同上）
    - `SimpleMovingAverageStrategy.php`: 移動平均線戦略の実装例
    - 新しい戦略を追加する場合は`TradingStrategy`を継承
 
@@ -54,6 +55,38 @@ Laravelベースの自動トレーディングシステムで、ペーパート�
   - `exit_order_id`, `exit_order_price`: 決済指値注文の管理用フィールド
 - **trading_logs**: 全ての取引実行ログ
 - **price_history**: 価格履歴（バックテスト用）
+  - `(symbol, recorded_at)` にユニーク制約。過去に戦略の数だけ重複記録され指標計算を歪めた
+- **order_book_snapshots**: 板情報の集計値（最良気配・厚み・売買の偏り）
+- **cross_market_snapshots**: 市場横断（国内4取引所の価格・BTC/USD・USD/JPY・日本プレミアム）
+  - `fx_age_seconds`: 為替の鮮度。FX市場は土日に閉じるため分析時に区別が必要
+- **spx_sessions**: S&P500のセッション情報（SpxReversalStrategy のシグナル源）
+
+### データ収集（売買の稼働状況に依存しない）
+
+全戦略を停止しても収集は続く。過去に価格記録が `OrderExecutor::execute()` の
+副作用だったため、全戦略停止で2日分の価格データを失った経験から分離した。
+
+| コマンド | 頻度 | 内容 |
+|---------|------|------|
+| `price:record` | 毎分 | 価格履歴（3銘柄） |
+| `orderbook:record` | 毎分 | 板情報（3銘柄） |
+| `market:record` | 毎分 | 市場横断（日本プレミアム・取引所間価格差） |
+| `spx:record` | 5分 | S&P500セッション（13:00-23:00 UTC） |
+
+### 安全装置
+
+| コマンド | 頻度 | 内容 |
+|---------|------|------|
+| `strategy:guard` | 15分 | 撤退基準に抵触した戦略を自動停止 |
+
+`trading_settings.parameters` に `max_cumulative_loss` / `evaluation_trade_count`
+を設定した戦略のみが対象。判定はすべて手数料控除後の純損益で行う。
+手動監視だと判断が先延ばしになるため機械的に執行する。
+
+```bash
+# 停止せず判定結果のみ確認
+php artisan strategy:guard --dry-run
+```
 
 ### 手数料トラッキング
 
@@ -134,7 +167,56 @@ php artisan tinker
 
 ## Implemented Strategies
 
-### RSIContrarianStrategy（RSI逆張り戦略）【現在運用中】
+### 稼働状況（2026-09-20時点）
+
+| 戦略 | 本番ID | 状態 | 実運用の結果 |
+|------|--------|------|------------|
+| SpxReversalStrategy | 7 | **稼働中** | 2取引 +71.7円 |
+| RSIContrarianStrategy | 5 | 停止 | 79取引 +1,065円 |
+| HighLowBreakoutStrategy | 2 | 停止 | 155取引 -16,263円 |
+
+検証の結果、RSI逆張りとブレイクアウトは手数料を超える優位性がないと判明したため停止した。
+詳細な検証記録は GitHub Issue #27 を参照。
+
+---
+
+### SpxReversalStrategy（米国株急落後のBTC反発）【現在運用中】
+
+米国市場でS&P500が大きく下げた日、引け後にBTCが反発する傾向を捉える。
+「価格から将来の価格を当てる」のではなく別市場の情報を使う点が他の戦略と異なる。
+
+**パラメータ（DBで管理・本番ID:7）:**
+
+| パラメータ | 説明 | 現在値 |
+|-----------|------|--------|
+| spx_threshold_percent | この値以下の下落でエントリー | -0.40 |
+| entry_window_minutes | セッション完了後エントリーを許可する時間 | 60 |
+| max_hold_minutes | 保有時間（分） | 240 |
+| trade_size | 1回の取引サイズ | 0.001 |
+| max_positions | 最大ポジション数 | 1 |
+| stop_loss_percent | 損切り（異常時の保険） | 3.0 |
+| initial_trailing_stop_percent | 初期トレーリング | 10.0 |
+| trailing_stop_offset_percent | トレーリング幅 | 10.0 |
+| max_cumulative_loss | 累計損失の上限（自動停止） | 3000 |
+| evaluation_trade_count | 期待値を評価する取引数（自動停止） | 20 |
+
+**トレーリングを10%と広く設定している理由**: バックテストが「4時間の単純保有」を
+前提としているため。狭いトレーリングが作動すると検証条件と乖離する。
+損切り3%も異常時の保険であり、通常の4時間保有では作動しない水準。
+
+**シグナル源**: `spx:record` コマンドが5分ごとに S&P500 のセッション情報を
+`spx_sessions` テーブルに記録する。売買判断のたびに外部APIを叩かないよう
+収集と判断を分離している。
+
+**決済条件**: 保有時間のみ（`shouldClosePosition` の timeout）。価格ベースの決済は行わない。
+
+**検証結果**: 学習 77件 +0.2279%(t=2.26) / 検証 34件 +0.2926%(t=2.13)。
+年別では利益が2024年に偏っており、2024年を除くとほぼ損益トントン。
+**収益目的ではなく実時間での検証が目的**（年間想定利益 約650円）。
+
+---
+
+### RSIContrarianStrategy（RSI逆張り戦略）【停止中】
 
 RSI（相対力指数）を使った逆張り戦略。売られすぎ・買われすぎの水準で反転を狙う。
 
@@ -167,8 +249,8 @@ BTCは往復手数料が約150円かかるため、以下の調整を実施：
 - エントリー条件を厳格化（RSI 25/75）→ 取引回数削減、反発幅拡大
 - 利確閾値を調整（55/45）→ より大きな利益を狙う
 
-**運用中の戦略:**
-- BTC RSI逆張り戦略（ID:5）※現在唯一運用中
+**停止理由:** 全期間で PF 0.4前後。実運用では +1,065円だったが、利益は2026年1月の
+40取引に集中しており継続的な優位性の証拠に乏しい。詳細は Issue #27。
 
 ---
 
@@ -441,8 +523,8 @@ EXCHANGE_API_SECRET=your_binance_api_secret
   - 日本の仮想通貨取引所
   - APIドキュメント: https://api.coin.z.com/docs/
   - 対応通貨ペア: BTC/JPY, ETH/JPY, XRP/JPY, LTC/JPY, BCH/JPY等
-  - 現在運用中: BTC/JPY（RSI逆張り戦略・手数料対策済み）
-  - 手数料: 約0.05%（taker手数料）※自動トラッキング対応
+  - 現在運用中: BTC/JPY（SpxReversalStrategy・0.001 BTC）
+  - 手数料: 往復約0.106%（エントリー・決済とも Taker）※自動トラッキング対応
 
 - **Binance** (`EXCHANGE_NAME=binance`)
   - 世界最大の仮想通貨取引所
