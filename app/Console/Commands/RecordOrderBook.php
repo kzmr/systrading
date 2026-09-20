@@ -182,10 +182,15 @@ class RecordOrderBook extends Command
             return array_values(array_unique($symbols));
         }
 
-        return TradingSettings::query()
+        $fromSettings = TradingSettings::query()
             ->distinct()
             ->orderBy('symbol')
             ->pluck('symbol')
             ->all();
+
+        // 売買対象ではないが検証のために板を記録したい銘柄（例: 取引所レバレッジ BTC_JPY）
+        $extra = (array) config('trading.orderbook.extra_symbols', []);
+
+        return array_values(array_unique(array_merge($fromSettings, $extra)));
     }
 }

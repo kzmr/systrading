@@ -69,7 +69,7 @@ Laravelベースの自動トレーディングシステムで、ペーパート�
 | コマンド | 頻度 | 内容 |
 |---------|------|------|
 | `price:record` | 毎分 | 価格履歴（3銘柄） |
-| `orderbook:record` | 毎分 | 板情報（3銘柄） |
+| `orderbook:record` | 毎分 | 板情報（3銘柄 + 取引所レバレッジ BTC_JPY。追加銘柄は `config/trading.php` の `orderbook.extra_symbols`） |
 | `market:record` | 毎分 | 市場横断（日本プレミアム・取引所間価格差） |
 | `spx:record` | 5分 | S&P500セッション（13:00-23:00 UTC） |
 

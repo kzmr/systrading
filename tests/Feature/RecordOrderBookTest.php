@@ -124,11 +124,30 @@ class RecordOrderBookTest extends TestCase
             'parameters' => [], 'is_active' => false,
         ]);
 
+        config(['trading.orderbook.extra_symbols' => []]);
         $this->mockFetcher($this->sampleBook());
 
         $this->artisan('orderbook:record')->assertSuccessful();
 
         $this->assertEquals(2, OrderBookSnapshot::count());
+    }
+
+    public function test_records_extra_symbols_from_config(): void
+    {
+        TradingSettings::create([
+            'name' => 'Test BTC', 'symbol' => 'BTC/JPY',
+            'strategy' => 'App\\Trading\\Strategy\\RSIContrarianStrategy',
+            'parameters' => [], 'is_active' => false,
+        ]);
+        config(['trading.orderbook.extra_symbols' => ['BTC_JPY']]);
+
+        $this->mockFetcher($this->sampleBook());
+
+        $this->artisan('orderbook:record')->assertSuccessful();
+
+        // trading_settings の BTC/JPY と、設定で追加した取引所レバレッジ BTC_JPY の両方が記録される
+        $this->assertEquals(2, OrderBookSnapshot::count());
+        $this->assertNotNull(OrderBookSnapshot::where('symbol', 'BTC_JPY')->first());
     }
 
     public function test_is_idempotent_within_same_minute(): void
